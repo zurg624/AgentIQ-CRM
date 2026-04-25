@@ -70,8 +70,10 @@ function exportToCSV(leads) {
   const csv = bom + [headers.join(','), ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'leads-agentiq.csv';
-  a.click(); URL.revokeObjectURL(url);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'leads-agentiq.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 150);
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────

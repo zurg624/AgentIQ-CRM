@@ -73,8 +73,10 @@ function exportCSV(res, inp) {
   const bom = '\uFEFF';
   const csv = bom + rows.map(r => r.map(v => `"${v ?? ''}"`).join(',')).join('\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-  Object.assign(document.createElement('a'), { href: url, download: 'חישוב-עסקה.csv' }).click();
-  URL.revokeObjectURL(url);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'חישוב-עסקה.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 150);
 }
 
 // ── Tiny Components ───────────────────────────────────────────────────────────
@@ -240,8 +242,10 @@ export default function ToolsPage() {
     const bom = '\uFEFF';
     const csv = bom + rows.map(r => r.map(v => `"${v ?? ''}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    Object.assign(document.createElement('a'), { href: url, download: 'היסטוריית-חישובים.csv' }).click();
-    URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'היסטוריית-חישובים.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 150);
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
