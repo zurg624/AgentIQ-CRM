@@ -45,6 +45,32 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS properties (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT NOT NULL,
+    price       INTEGER NOT NULL,
+    city        TEXT,
+    area        TEXT,
+    type        TEXT,
+    rooms       REAL,
+    sqm         INTEGER,
+    url         TEXT,
+    source      TEXT NOT NULL DEFAULT 'API',
+    description TEXT,
+    ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id        INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+    property_id    INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+    score          INTEGER NOT NULL DEFAULT 0,
+    message        TEXT NOT NULL,
+    owner_username TEXT,
+    read           INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ── Migrations for pre-existing DBs ──────────────────────────────────────────
@@ -92,6 +118,13 @@ if (settingsCount === 0) {
   ins.run('vat_pct',        '17');
   ins.run('brokerage_pct',  '2');
   ins.run('lawyer_pct',     '0.5');
+}
+
+// Auto-generate ingest API key if not set
+const apiKeyRow = db.prepare("SELECT value FROM settings WHERE key = 'ingest_api_key'").get();
+if (!apiKeyRow) {
+  const key = 'iq_' + require('crypto').randomBytes(20).toString('hex');
+  db.prepare("INSERT INTO settings (key, value) VALUES ('ingest_api_key', ?)").run(key);
 }
 
 module.exports = db;

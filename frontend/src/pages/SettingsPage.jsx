@@ -25,12 +25,50 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
   const [saving,  setSaving]  = useState(false);
   const [toast,   setToast]   = useState('');
   const [confirm, setConfirm] = useState('');
+  const [ingestedProps, setIngestedProps] = useState([]);
+  const [loadingProps,  setLoadingProps]  = useState(false);
+  const [testing,       setTesting]       = useState(false);
+  const [keyCopied,     setKeyCopied]     = useState(false);
 
   useEffect(() => {
     if (settings) {
       setForm(prev => ({ ...prev, ...settings }));
     }
   }, [settings]);
+
+  const loadIngestedProps = () => {
+    setLoadingProps(true);
+    api.getIngestedProperties()
+      .then(setIngestedProps)
+      .catch(() => setIngestedProps([]))
+      .finally(() => setLoadingProps(false));
+  };
+
+  useEffect(() => {
+    if (user?.role === 'admin') loadIngestedProps();
+  }, [user]);
+
+  const handleCopyKey = () => {
+    const key = settings?.ingest_api_key || '';
+    if (!key) return;
+    navigator.clipboard.writeText(key).then(() => {
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    });
+  };
+
+  const handleTestWebhook = async () => {
+    setTesting(true);
+    try {
+      await api.ingestTest();
+      showToast('✅ נכס בדיקה נשלח — בדוק את ה-Notifications');
+      setTimeout(loadIngestedProps, 1500);
+    } catch (err) {
+      showToast('❌ שגיאה: ' + err.message, 'error');
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -173,6 +211,134 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
             </button>
           </Section>
         )}
+        {/* ── API Integrations (admin only, full width) ── */}
+        {isAdmin && (
+          <div className="md:col-span-2">
+            <Section title="🔌 API Integrations — Lead Ingestion Engine">
+              <p className="text-xs text-right" style={{ color: '#94a3b8' }}>
+                שלח נכסים ממקורות חיצוניים (אתרים, scrapers, שותפים) ישירות למערכת.
+                המערכת תבצע התאמה אוטומטית ותשלח התראה לסוכן הרלוונטי.
+              </p>
+
+              {/* Endpoint */}
+              <Field label="Webhook URL">
+                <div className="flex gap-2">
+                  <input readOnly value="https://agentiq-crm.onrender.com/api/ingest/property"
+                    className="dark-input flex-1 px-3 py-2 text-xs rounded-xl font-mono"
+                    style={{ color: '#a5b4fc' }} />
+                  <button
+                    onClick={() => { navigator.clipboard.writeText('https://agentiq-crm.onrender.com/api/ingest/property'); showToast('✅ URL הועתק'); }}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold transition-all"
+                    style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}>
+                    העתק
+                  </button>
+                </div>
+              </Field>
+
+              {/* API Key */}
+              <Field label="מפתח API" hint="שלח כ-header: x-api-key: [KEY]">
+                <div className="flex gap-2">
+                  <input readOnly
+                    value={settings?.ingest_api_key ? '••••••••••••' + (settings.ingest_api_key.slice(-6)) : 'טוען...'}
+                    className="dark-input flex-1 px-3 py-2 text-xs rounded-xl font-mono"
+                    style={{ color: '#fbbf24', letterSpacing: '0.08em' }} />
+                  <button onClick={handleCopyKey}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold transition-all min-w-[70px]"
+                    style={keyCopied
+                      ? { background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)' }
+                      : { background: 'rgba(245,158,11,0.12)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)' }
+                    }>
+                    {keyCopied ? '✓ הועתק' : '📋 העתק'}
+                  </button>
+                </div>
+              </Field>
+
+              {/* Payload example */}
+              <Field label="פורמט ה-Payload (JSON)">
+                <pre className="text-[10px] p-3 rounded-xl overflow-x-auto text-left"
+                  style={{ background: 'rgba(0,0,0,0.4)', color: '#7dd3fc', border: '1px solid rgba(255,255,255,0.06)', fontFamily: 'monospace', direction: 'ltr' }}>
+{`POST /api/ingest/property
+Headers: x-api-key: YOUR_KEY
+         Content-Type: application/json
+
+{
+  "title":       "דירה 4 חדרים, קרוב לים",
+  "price":       2500000,
+  "city":        "תל אביב",
+  "area":        "פלורנטין",
+  "type":        "דירה",
+  "rooms":       4,
+  "sqm":         110,
+  "url":         "https://...",
+  "source":      "Yad2",
+  "description": "תיאור הנכס..."
+}`}
+                </pre>
+              </Field>
+
+              {/* Test + Recent */}
+              <div className="flex items-center gap-3">
+                <button onClick={handleTestWebhook} disabled={testing}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
+                  style={{ background: 'linear-gradient(135deg,rgba(245,158,11,0.2),rgba(245,158,11,0.1))', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)' }}>
+                  {testing
+                    ? <><span className="w-4 h-4 border-2 border-yellow-600/30 border-t-yellow-400 rounded-full animate-spin" /> שולח...</>
+                    : '🧪 שלח נכס בדיקה'}
+                </button>
+                <button onClick={loadIngestedProps} disabled={loadingProps}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-60"
+                  style={{ background: 'rgba(255,255,255,0.05)', color: '#64748b', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  🔄 רענן
+                </button>
+              </div>
+
+              {/* Recent ingested properties */}
+              {ingestedProps.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold mb-2 text-right" style={{ color: '#64748b' }}>
+                    נכסים שנקלטו לאחרונה ({ingestedProps.length})
+                  </p>
+                  <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+                    <table className="w-full text-xs" dir="rtl">
+                      <thead>
+                        <tr style={{ background: 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                          {['כותרת', 'עיר', 'מחיר', 'מקור', 'תאריך'].map(h => (
+                            <th key={h} className="text-right px-3 py-2 font-semibold" style={{ color: '#64748b' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ingestedProps.slice(0, 10).map(p => (
+                          <tr key={p.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}
+                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                            onMouseLeave={e => e.currentTarget.style.background = ''}>
+                            <td className="px-3 py-2 text-white max-w-[160px] truncate">{p.title}</td>
+                            <td className="px-3 py-2" style={{ color: '#a5b4fc' }}>{p.city || '—'}</td>
+                            <td className="px-3 py-2" style={{ color: '#fbbf24' }}>
+                              {p.price ? `₪${(p.price/1_000_000).toFixed(1)}M` : '—'}
+                            </td>
+                            <td className="px-3 py-2" style={{ color: '#64748b' }}>{p.source}</td>
+                            <td className="px-3 py-2" style={{ color: '#334155' }}>
+                              {p.ingested_at ? new Date(p.ingested_at + 'Z').toLocaleDateString('he-IL') : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {ingestedProps.length === 0 && !loadingProps && (
+                <div className="py-6 text-center" style={{ color: '#334155' }}>
+                  <div className="text-2xl mb-1">📭</div>
+                  <p className="text-xs">אין נכסים שנקלטו עדיין. לחץ "שלח נכס בדיקה" כדי לבדוק.</p>
+                </div>
+              )}
+            </Section>
+          </div>
+        )}
+
       </div>
 
       {/* Save button */}

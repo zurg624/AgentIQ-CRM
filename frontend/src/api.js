@@ -41,6 +41,14 @@ export const api = {
   // Smart Neighbor
   smartNeighbor: (address) => request('/smart-neighbor', { method: 'POST', body: JSON.stringify({ address }) }),
 
+  // Lead Ingestion Engine
+  ingestProperty:       (body)  => request('/ingest/property',   { method: 'POST', body: JSON.stringify(body) }),
+  ingestTest:           ()      => request('/ingest/test',        { method: 'POST' }),
+  getIngestedProperties:()      => request('/ingest/properties'),
+  getNotifications:     ()      => request('/notifications'),
+  markNotifRead:        (id)    => request(`/notifications/${id}/read`, { method: 'PATCH' }),
+  markAllNotifsRead:    ()      => request('/notifications/read-all',   { method: 'POST' }),
+
   // Auth
   login:        (username, password) => request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   getMe:        ()             => request('/auth/me'),

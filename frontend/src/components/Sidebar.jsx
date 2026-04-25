@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useLang, LANG_META } from '../i18n';
+import NotificationBell from './NotificationBell';
 
 const NAV = [
   { key: 'chatbot',   label: "🤖 צ'אטבוט" },
@@ -16,7 +17,7 @@ const NAV = [
 
 const MOBILE_NAV = ['crm', 'hunter', 'dealcalc', 'reports', 'settings'];
 
-export default function Sidebar({ page, setPage, user, onLogout, systemName = 'AgentIQ' }) {
+export default function Sidebar({ page, setPage, user, onLogout, systemName = 'AgentIQ', notifications = [], onMarkNotifRead, onMarkAllNotifsRead }) {
   const { lang, setLang } = useLang();
   const [open, setOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -64,6 +65,18 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
             </button>
           ))}
         </nav>
+
+        {/* Notifications */}
+        <div className="px-4 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="flex items-center justify-between">
+            <NotificationBell
+              notifications={notifications}
+              onMarkRead={onMarkNotifRead}
+              onMarkAllRead={onMarkAllNotifsRead}
+            />
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#475569' }}>התראות</span>
+          </div>
+        </div>
 
         {/* Language */}
         <div className="px-3 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>

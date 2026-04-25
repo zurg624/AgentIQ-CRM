@@ -5,6 +5,7 @@ import StatsBar from './components/StatsBar';
 import LeadDetailPanel from './components/LeadDetailPanel';
 import Toast from './components/Toast';
 import LoginPage from './pages/LoginPage';
+import NotificationBell from './components/NotificationBell';
 import CRMPage from './pages/CRMPage';
 import ChatbotPage from './pages/ChatbotPage';
 import FollowUpPage from './pages/FollowUpPage';
@@ -53,7 +54,8 @@ function AppInner() {
   const [simulating, setSimulating] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
   const [toast,    setToast]    = useState(null);
-  const [settings, setSettings] = useState(null);
+  const [settings,       setSettings]       = useState(null);
+  const [notifications,  setNotifications]  = useState([]);
 
   // Auth state
   const [user,  setUser]  = useState(() => loadStoredAuth().user);
@@ -87,7 +89,8 @@ function AppInner() {
       .then(([l, a]) => { setLeads(l); setAgents(a); })
       .catch(err => console.error('[AgentIQ] initial load failed:', err))
       .finally(() => setLoading(false));
-    api.getSettings().then(setSettings).catch(() => {/* backend not yet deployed */});
+    api.getSettings().then(setSettings).catch(() => {});
+    api.getNotifications().then(setNotifications).catch(() => {});
   }, [user]);
 
   // SSE for new leads
@@ -103,6 +106,12 @@ function AppInner() {
       });
       if (selectedLead?.id === lead.id) setSelectedLead(lead);
       showToast(lead);
+    });
+    es.addEventListener('new-match', (e) => {
+      const notif = JSON.parse(e.data);
+      setNotifications(prev => [notif, ...prev]);
+      // Show as toast too
+      showToast({ _isMatch: true, message: notif.message, score: notif.score });
     });
     return () => es.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,6 +152,15 @@ function AppInner() {
 
   const refreshLeads = () => { api.getLeads().then(setLeads).catch(console.error); };
 
+  const handleMarkNotifRead = (id) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: 1 } : n));
+    api.markNotifRead(id).catch(console.error);
+  };
+  const handleMarkAllNotifsRead = () => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: 1 })));
+    api.markAllNotifsRead().catch(console.error);
+  };
+
   const systemName = settings?.system_name || 'AgentIQ';
 
   // ── Show login if not authenticated ──────────────────────────────────────────
@@ -167,6 +185,9 @@ function AppInner() {
         page={page} setPage={setPage}
         user={user} onLogout={handleLogout}
         systemName={systemName}
+        notifications={notifications}
+        onMarkNotifRead={handleMarkNotifRead}
+        onMarkAllNotifsRead={handleMarkAllNotifsRead}
       />
 
       <div className="md:hidden h-14 w-full fixed top-0 z-30" style={{ background: '#0b0f1e' }} />

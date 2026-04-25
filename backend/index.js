@@ -371,6 +371,169 @@ app.get('/api/matches', (req, res) => {
   });
 });
 
+// ── Lead Ingestion Engine ─────────────────────────────────────────────────────
+
+// Matching score for ingested properties against leads
+function calcIngestScore(lead, prop) {
+  const budget = _parseBudget(lead.message);
+  const rooms  = _parseRooms(lead.message);
+  const area   = _parseArea(lead.message);
+  let score = 0;
+
+  // Budget (40 pts)
+  if (budget && prop.price) {
+    const ratio = prop.price / budget;
+    if (ratio <= 0.90)      score += 40;
+    else if (ratio <= 1.05) score += 35;
+    else if (ratio <= 1.20) score += 20;
+    else if (ratio <= 1.35) score += 10;
+    else return 0;
+  } else { score += 12; }
+
+  // City / area (30 pts)
+  const propLoc = `${prop.city || ''} ${prop.area || ''}`.trim().toLowerCase();
+  const leadMsg = (lead.message || '').toLowerCase();
+  if (propLoc) {
+    const locWords = propLoc.split(/\s+/);
+    if (locWords.some(w => w.length > 1 && leadMsg.includes(w))) score += 30;
+    else if (area && propLoc.includes(area.toLowerCase()))        score += 20;
+  }
+
+  // Rooms (20 pts)
+  if (rooms && prop.rooms) {
+    if (rooms === prop.rooms)                    score += 20;
+    else if (Math.abs(rooms - prop.rooms) === 1) score += 10;
+  } else { score += 7; }
+
+  // Type bonus (10 pts)
+  const typeKeywords = { 'דירה':['דירה','apartment'], 'בית':['בית','house','וילה'], 'פנטהאוז':['פנטהאוז','penthouse'] };
+  const pt = (prop.type || '').toLowerCase();
+  for (const [k, kws] of Object.entries(typeKeywords)) {
+    if (pt.includes(k) && kws.some(w => leadMsg.includes(w))) { score += 10; break; }
+  }
+
+  return Math.min(score, 99);
+}
+
+// POST /api/ingest/property — gateway for Apify, Meta Ads, manual push
+app.post('/api/ingest/property', (req, res) => {
+  // Optional API key check
+  const keyRow = db.prepare("SELECT value FROM settings WHERE key = 'ingest_api_key'").get();
+  const expectedKey = keyRow?.value;
+  const sentKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (expectedKey && sentKey && sentKey !== expectedKey) {
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+
+  const { title, price, city, area, type, rooms, sqm, url, source = 'API', description } = req.body;
+  if (!title || !price) return res.status(400).json({ error: 'title and price are required' });
+
+  // Store property
+  const ins = db.prepare(`
+    INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, Number(price), city||null, area||null, type||null, rooms||null, sqm||null, url||null, source, description||null);
+
+  const propId = ins.lastInsertRowid;
+  const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propId);
+
+  // Scan active leads for matches
+  const leads = db.prepare("SELECT * FROM leads WHERE status != 'Closed'").all();
+  const matches = [];
+
+  for (const lead of leads) {
+    const score = calcIngestScore(lead, property);
+    if (score >= 80) {
+      const msg = `🏠 התאמה חדשה: "${title}" — ${score}% עבור ${lead.name}`;
+      const notifIns = db.prepare(`
+        INSERT INTO notifications (lead_id, property_id, score, message, owner_username)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(lead.id, propId, score, msg, lead.owner_username || 'admin');
+
+      const notif = db.prepare(`
+        SELECT n.*, l.name as lead_name, p.title as prop_title, p.city as prop_city
+        FROM notifications n
+        JOIN leads l ON n.lead_id = l.id
+        JOIN properties p ON n.property_id = p.id
+        WHERE n.id = ?
+      `).get(notifIns.lastInsertRowid);
+
+      matches.push(notif);
+      broadcast('new-match', notif);
+    }
+  }
+
+  res.status(201).json({ property, matches_found: matches.length, matches });
+});
+
+// GET /api/ingest/properties — list of recently ingested properties
+app.get('/api/ingest/properties', (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  res.json(db.prepare('SELECT * FROM properties ORDER BY ingested_at DESC LIMIT ?').all(limit));
+});
+
+// GET /api/notifications
+app.get('/api/notifications', (req, res) => {
+  const rows = db.prepare(`
+    SELECT n.*, l.name as lead_name, p.title as prop_title, p.city as prop_city, p.price as prop_price
+    FROM notifications n
+    JOIN leads l ON n.lead_id = l.id
+    JOIN properties p ON n.property_id = p.id
+    ORDER BY n.created_at DESC LIMIT 50
+  `).all();
+  res.json(rows);
+});
+
+// PATCH /api/notifications/:id/read
+app.patch('/api/notifications/:id/read', (req, res) => {
+  db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// POST /api/notifications/read-all
+app.post('/api/notifications/read-all', (req, res) => {
+  db.prepare('UPDATE notifications SET read = 1').run();
+  res.json({ ok: true });
+});
+
+// POST /api/ingest/test — sends a test property through the engine
+app.post('/api/ingest/test', (req, res) => {
+  req.body = {
+    title: `נכס בדיקה — דירה 4 חד' רמת גן`,
+    price: 2_400_000, city: 'רמת גן', area: 'בורסה',
+    type: 'דירה', rooms: 4, sqm: 105,
+    source: 'Test', description: 'פינוי בינוי, חניה, מרפסת',
+  };
+  // Forward through the real handler by re-calling the logic inline
+  const { title, price, city, area, type, rooms, sqm, url, source, description } = req.body;
+  const ins = db.prepare(`
+    INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, price, city, area, type, rooms, sqm, null, source, description);
+  const propId = ins.lastInsertRowid;
+  const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propId);
+  const leads = db.prepare("SELECT * FROM leads WHERE status != 'Closed'").all();
+  const matches = [];
+  for (const lead of leads) {
+    const score = calcIngestScore(lead, property);
+    if (score >= 80) {
+      const msg = `🏠 התאמה חדשה: "${title}" — ${score}% עבור ${lead.name}`;
+      const notifIns = db.prepare(`
+        INSERT INTO notifications (lead_id, property_id, score, message, owner_username)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(lead.id, propId, score, msg, lead.owner_username || 'admin');
+      const notif = db.prepare(`
+        SELECT n.*, l.name as lead_name, p.title as prop_title, p.city as prop_city
+        FROM notifications n JOIN leads l ON n.lead_id = l.id JOIN properties p ON n.property_id = p.id
+        WHERE n.id = ?
+      `).get(notifIns.lastInsertRowid);
+      matches.push(notif);
+      broadcast('new-match', notif);
+    }
+  }
+  res.json({ property, matches_found: matches.length, matches });
+});
+
 // ── Smart Neighbor — AI neighborhood report ───────────────────────────────────
 function mockNeighborReport(address) {
   const city = ['תל אביב','רמת גן','ירושלים','חיפה','נתניה','פתח תקווה','ראשון לציון','הרצליה']
