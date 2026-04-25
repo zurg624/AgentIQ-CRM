@@ -85,7 +85,7 @@ function Toggle({ value, onChange, label }) {
     <div className="flex items-center justify-between">
       <span className="text-xs font-medium" style={{ color: '#94a3b8' }}>{label}</span>
       <div onClick={() => onChange(!value)} className="w-10 h-5 rounded-full relative cursor-pointer transition-colors flex-shrink-0"
-        style={{ background: value ? '#3b82f6' : 'rgba(255,255,255,0.1)' }}>
+        style={{ background: value ? 'linear-gradient(135deg,#f59e0b,#d97706)' : 'rgba(255,255,255,0.1)', boxShadow: value ? '0 0 10px rgba(245,158,11,0.4)' : 'none' }}>
         <span className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200"
           style={{ left: value ? '1.375rem' : '0.125rem' }} />
       </div>
@@ -100,7 +100,7 @@ function Pills({ options, value, onChange }) {
         <button key={o.value} onClick={() => onChange(o.value)}
           className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
           style={value === o.value
-            ? { background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', color: 'white' }
+            ? { background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', fontWeight: 700, boxShadow: '0 0 14px rgba(245,158,11,0.4)' }
             : { color: '#64748b' }}>
           {o.label}
         </button>
@@ -301,10 +301,9 @@ export default function ToolsPage() {
               {/* Total cost callout */}
               <div className="card rounded-2xl p-5">
                 <div className="text-xs font-semibold mb-1 text-right" style={{ color: '#64748b' }}>תוצאות העסקה 📊</div>
-                <div className="rounded-xl p-4 text-center mb-4"
-                  style={{ background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)' }}>
+                <div className="gold-box glow-gold rounded-xl p-4 text-center mb-4">
                   <div className="text-xs font-semibold mb-1" style={{ color: '#eab308' }}>עלות כוללת לעסקה</div>
-                  <div className="text-3xl font-black" style={{ color: '#fbbf24' }}>
+                  <div className="shimmer-gold text-3xl font-black">
                     ₪ {Math.round(R.totalCost).toLocaleString('he-IL')}
                   </div>
                 </div>
@@ -334,8 +333,7 @@ export default function ToolsPage() {
               </div>
 
               {/* OWN CAPITAL — highlighted */}
-              <div className="rounded-2xl p-4"
-                style={{ background: 'rgba(234,179,8,0.07)', border: '2px solid rgba(234,179,8,0.35)' }}>
+              <div className="gold-box glow-gold rounded-2xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-2xl font-black" style={{ color: '#fbbf24' }}>

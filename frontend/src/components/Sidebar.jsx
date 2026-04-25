@@ -24,10 +24,10 @@ export default function Sidebar({ page, setPage }) {
 
         {/* Logo */}
         <div className="px-5 py-5 flex items-center gap-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-base"
-            style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)' }}>A</div>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-base"
+            style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', boxShadow: '0 0 18px rgba(245,158,11,0.4)' }}>A</div>
           <div>
-            <div className="font-bold text-white text-sm tracking-wide">AgentIQ</div>
+            <div className="shimmer-gold font-black text-sm tracking-wide" style={{ fontWeight: 800 }}>AgentIQ</div>
             <div className="text-xs" style={{ color: '#64748b' }}>Real Estate CRM</div>
           </div>
         </div>
@@ -36,13 +36,13 @@ export default function Sidebar({ page, setPage }) {
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {NAV.map(({ key, label }) => (
             <button key={key} onClick={() => setPage(key)}
-              className="w-full text-right px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-150"
+              className={`w-full text-right px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${page === key ? 'nav-active' : ''}`}
               style={page === key
-                ? { background: 'linear-gradient(135deg,rgba(59,130,246,0.25),rgba(139,92,246,0.25))', color: '#93c5fd', borderLeft: '3px solid #3b82f6' }
+                ? { borderLeft: '3px solid #f59e0b' }
                 : { color: '#64748b', borderLeft: '3px solid transparent' }
               }
-              onMouseEnter={e => { if (page !== key) e.currentTarget.style.color = '#cbd5e1'; }}
-              onMouseLeave={e => { if (page !== key) e.currentTarget.style.color = '#64748b'; }}
+              onMouseEnter={e => { if (page !== key) { e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; } }}
+              onMouseLeave={e => { if (page !== key) { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = ''; } }}
             >
               {label}
             </button>
@@ -57,7 +57,7 @@ export default function Sidebar({ page, setPage }) {
               <button key={code} onClick={() => setLang(code)}
                 className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors"
                 style={lang === code
-                  ? { background: 'rgba(59,130,246,0.2)', color: '#93c5fd' }
+                  ? { background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }
                   : { color: '#475569' }
                 }>
                 <span>{flag}</span>{label}
@@ -69,8 +69,8 @@ export default function Sidebar({ page, setPage }) {
         {/* User */}
         <div className="px-4 py-4" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
-              style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)' }}>AM</div>
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+              style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', boxShadow: '0 0 12px rgba(245,158,11,0.35)' }}>AM</div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-white truncate">Admin Manager</div>
               <div className="text-xs truncate" style={{ color: '#475569' }}>admin@agentiq.co.il</div>
@@ -83,8 +83,8 @@ export default function Sidebar({ page, setPage }) {
       <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3 md:hidden"
         style={{ background: '#0b0f1e', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-black text-xs"
-            style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)' }}>A</div>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs"
+            style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', boxShadow: '0 0 12px rgba(245,158,11,0.4)' }}>A</div>
           <span className="text-white font-bold text-sm">AgentIQ</span>
         </div>
         <button onClick={() => setOpen(v => !v)} className="p-2 rounded-lg" style={{ color: '#94a3b8' }}>
@@ -105,7 +105,7 @@ export default function Sidebar({ page, setPage }) {
               <button key={key} onClick={() => { setPage(key); setOpen(false); }}
                 className="w-full text-right px-4 py-3 rounded-xl text-sm font-medium"
                 style={page === key
-                  ? { background: 'rgba(59,130,246,0.2)', color: '#93c5fd' }
+                  ? { background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }
                   : { color: '#94a3b8' }}>
                 {label}
               </button>
@@ -121,7 +121,7 @@ export default function Sidebar({ page, setPage }) {
           return (
             <button key={key} onClick={() => setPage(key)}
               className="flex-1 flex flex-col items-center py-2 text-center"
-              style={{ color: page === key ? '#60a5fa' : '#475569' }}>
+              style={{ color: page === key ? '#fbbf24' : '#475569' }}>
               <span className="text-lg">{emoji}</span>
               <span className="text-[9px] mt-0.5 truncate w-full px-0.5">{rest.join(' ')}</span>
             </button>
