@@ -2,12 +2,10 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-// On Render, use the persistent disk at /data; locally use project root
-const DB_PATH = process.env.NODE_ENV === 'production'
-  ? '/data/crm.db'
-  : path.join(__dirname, 'crm.db');
+// DB_PATH env var lets you point to a persistent disk on Render (optional).
+// Falls back to crm.db next to this file — works everywhere with no extra setup.
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'crm.db');
 
-// Ensure the directory exists before SQLite tries to open the file
 const DB_DIR = path.dirname(DB_PATH);
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
