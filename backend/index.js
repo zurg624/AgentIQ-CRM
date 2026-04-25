@@ -1,7 +1,15 @@
 const express = require('express');
 const cors = require('cors');
-const db = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
+
+// Surface DB startup errors immediately rather than silently dying
+let db;
+try {
+  db = require('./db');
+} catch (err) {
+  console.error('FATAL: DB failed to initialise:', err.message);
+  process.exit(1);
+}
 
 const app = express();
 
@@ -226,5 +234,11 @@ app.post('/api/ai-chat', async (req, res) => {
   setTimeout(() => res.json({ reply }), 400);
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`CRM API running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`));
+// ── Health check (Render pings this to verify the service is up) ─────────────
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'AgentIQ CRM API' }));
+app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, '0.0.0.0', () =>
+  console.log(`AgentIQ API on port ${PORT} [${process.env.NODE_ENV || 'development'}]`)
+);

@@ -3,18 +3,12 @@ services:
     name: agentiq-backend
     runtime: node
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm install && npm rebuild better-sqlite3
     startCommand: node index.js
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3001
       - key: ANTHROPIC_API_KEY
-        sync: false          # You'll paste this in the Render dashboard
+        sync: false
       - key: FRONTEND_URL
-        sync: false          # Paste your Vercel URL here after deploying frontend
-    disk:
-      name: crm-data
-      mountPath: /data       # SQLite database lives here — persists across deploys
-      sizeGB: 1
+        sync: false
