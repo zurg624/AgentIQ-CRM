@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables — NEVER commit these
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Database
+backend/crm.db
+backend/crm.db-shm
+backend/crm.db-wal
+
+# Build output
+frontend/dist/
+frontend/.vite/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
