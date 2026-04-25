@@ -23,17 +23,24 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS leads (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    phone       TEXT,
-    source      TEXT NOT NULL DEFAULT 'Manual',
-    message     TEXT,
-    agent_id    INTEGER REFERENCES agents(id) ON DELETE SET NULL,
-    status      TEXT NOT NULL DEFAULT 'New',
-    ai_summary  TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    phone          TEXT,
+    source         TEXT NOT NULL DEFAULT 'Manual',
+    message        TEXT,
+    agent_id       INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+    status         TEXT NOT NULL DEFAULT 'New',
+    ai_summary     TEXT,
+    notes          TEXT,
+    last_contacted TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// Migrate existing DBs that were created before notes/last_contacted columns existed
+const cols = db.prepare("PRAGMA table_info(leads)").all().map(c => c.name);
+if (!cols.includes('notes'))          db.exec("ALTER TABLE leads ADD COLUMN notes TEXT");
+if (!cols.includes('last_contacted')) db.exec("ALTER TABLE leads ADD COLUMN last_contacted TEXT");
 
 // Seed agents if empty
 const agentCount = db.prepare('SELECT COUNT(*) as c FROM agents').get().c;

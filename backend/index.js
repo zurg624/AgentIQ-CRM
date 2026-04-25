@@ -212,6 +212,41 @@ app.patch('/api/leads/:id/ai-summary', (req, res) => {
   res.json({ id: parseInt(req.params.id), ai_summary });
 });
 
+app.put('/api/leads/:id', (req, res) => {
+  const { name, phone, source, message, notes, last_contacted } = req.body;
+  const lead = db.prepare('SELECT id FROM leads WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`
+    UPDATE leads SET
+      name = COALESCE(?, name),
+      phone = COALESCE(?, phone),
+      source = COALESCE(?, source),
+      message = COALESCE(?, message),
+      notes = COALESCE(?, notes),
+      last_contacted = COALESCE(?, last_contacted)
+    WHERE id = ?
+  `).run(name ?? null, phone ?? null, source ?? null, message ?? null, notes ?? null, last_contacted ?? null, req.params.id);
+  const updated = db.prepare(
+    'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
+  ).get(req.params.id);
+  res.json(updated);
+});
+
+app.delete('/api/leads/:id', (req, res) => {
+  const lead = db.prepare('SELECT id FROM leads WHERE id = ?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  db.prepare('DELETE FROM leads WHERE id = ?').run(req.params.id);
+  res.json({ deleted: parseInt(req.params.id) });
+});
+
+app.post('/api/leads/bulk-delete', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array required' });
+  const placeholders = ids.map(() => '?').join(',');
+  const result = db.prepare(`DELETE FROM leads WHERE id IN (${placeholders})`).run(...ids);
+  res.json({ deleted: result.changes });
+});
+
 // ── AI Chat (real Claude) ────────────────────────────────────────────────────
 const AI_FALLBACK = {
   'מס רכישה': '🏠 מס רכישה בישראל (2025):\n• דירה ראשונה עד ₪1,978,745 — פטור\n• ₪1,978,745–₪2,347,040 — 3.5%\n• מעל ₪6,055,695 — 8%–10%',
