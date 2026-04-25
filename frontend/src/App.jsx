@@ -2,10 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { LangProvider, useLang } from './i18n';
 import Sidebar from './components/Sidebar';
 import StatsBar from './components/StatsBar';
-import StatsCard from './components/StatsCard';
-import LeadsTable from './components/LeadsTable';
 import LeadDetailPanel from './components/LeadDetailPanel';
 import Toast from './components/Toast';
+import CRMPage from './pages/CRMPage';
 import ChatbotPage from './pages/ChatbotPage';
 import FollowUpPage from './pages/FollowUpPage';
 import ShachenPage from './pages/ShachenPage';
@@ -22,64 +21,6 @@ const SIMULATE_LEADS = [
   { name: 'מרים אבו-עבד', phone: '058-6677889', source: 'WhatsApp', message: 'أبحث عن شقة في حيفا، 4 غرف، قريبة من المدارس' },
 ];
 
-// ── CRM Tab (Dashboard) ───────────────────────────────────────────────────────
-function CRMPage({ leads, agents, loading, onAssignAgent, onChangeStatus, onSelectLead, onSimulate, simulating, onShowSimulate }) {
-  const { t } = useLang();
-  const stats = {
-    total:    leads.length,
-    new:      leads.filter(l => l.status === 'New').length,
-    meetings: leads.filter(l => l.status === 'Meeting Scheduled').length,
-    closed:   leads.filter(l => l.status === 'Closed').length,
-  };
-
-  return (
-    <>
-      {/* Header */}
-      <div className="px-4 md:px-6 py-4 flex items-center justify-between gap-3 flex-wrap flex-shrink-0"
-        style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        <div>
-          <h1 className="text-xl font-bold text-white">{t('lead_management')}</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#64748b' }}>{t('lead_management_sub')}</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <input placeholder={t('search_placeholder')}
-              className="dark-input pl-8 pr-4 py-2 text-sm w-44" />
-            <svg className="absolute left-2.5 top-2.5 w-4 h-4" style={{ color: '#475569' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          </div>
-          {onShowSimulate && (
-            <button onClick={onSimulate} disabled={simulating}
-              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-60 transition-all"
-              style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.2)' }}
-              title="Admin only">
-              <span>{simulating ? '⏳' : '🔧'}</span>
-              Simulate
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="flex-1 px-4 md:px-6 py-5 space-y-5 overflow-auto">
-        {loading ? (
-          <div className="flex items-center justify-center h-64" style={{ color: '#334155' }}>טוען...</div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatsCard label={t('total_leads')}  value={stats.total}    delta={t('all_time')}          color="#60a5fa" />
-              <StatsCard label={t('new_leads')}    value={stats.new}      delta={t('awaiting_contact')}  color="#93c5fd" />
-              <StatsCard label={t('meetings')}     value={stats.meetings} delta={t('scheduled')}         color="#c4b5fd" />
-              <StatsCard label={t('closed_deals')} value={stats.closed}   delta={t('this_month')}        color="#6ee7b7" />
-            </div>
-            <LeadsTable leads={leads} agents={agents}
-              onAssignAgent={onAssignAgent} onChangeStatus={onChangeStatus} onSelectLead={onSelectLead} />
-          </>
-        )}
-      </div>
-    </>
-  );
-}
 
 // ── App inner ─────────────────────────────────────────────────────────────────
 // Admin mode: run `localStorage.setItem('iq_admin','1')` in browser console to unlock
@@ -155,6 +96,10 @@ function AppInner() {
     }
   };
 
+  const refreshLeads = () => {
+    api.getLeads().then(setLeads).catch(console.error);
+  };
+
   const sharedCRMProps = {
     leads, agents, loading,
     onAssignAgent: handleAssignAgent,
@@ -162,6 +107,7 @@ function AppInner() {
     onSelectLead: setSelectedLead,
     onSimulate: handleSimulate,
     simulating,
+    onRefresh: refreshLeads,
   };
 
   return (
@@ -180,7 +126,7 @@ function AppInner() {
 
         {/* Page content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {page === 'crm'       && <CRMPage {...sharedCRMProps} onShowSimulate={adminMode} />}
+          {page === 'crm'       && <CRMPage {...sharedCRMProps} onShowSimulate={adminMode} onRefresh={refreshLeads} />}
           {page === 'chatbot'   && <ChatbotPage />}
           {page === 'followup'  && (
             <FollowUpPage leads={leads} agents={agents}
