@@ -38,6 +38,9 @@ export const api = {
   getMatches:   ()             => request('/matches'),
   chat:         (message)      => request('/ai-chat',               { method: 'POST',   body: JSON.stringify({ message }) }),
 
+  // Smart Neighbor
+  smartNeighbor: (address) => request('/smart-neighbor', { method: 'POST', body: JSON.stringify({ address }) }),
+
   // Auth
   login:        (username, password) => request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   getMe:        ()             => request('/auth/me'),

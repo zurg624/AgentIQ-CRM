@@ -371,6 +371,113 @@ app.get('/api/matches', (req, res) => {
   });
 });
 
+// ── Smart Neighbor — AI neighborhood report ───────────────────────────────────
+function mockNeighborReport(address) {
+  const city = ['תל אביב','רמת גן','ירושלים','חיפה','נתניה','פתח תקווה','ראשון לציון','הרצליה']
+    .find(c => address.includes(c)) || 'המרכז';
+  const D = {
+    'תל אביב':       { ppqm:38000,trend:6.2,avg:3_800_000,school:9,transport:10,invest:88,income:'גבוה' },
+    'רמת גן':        { ppqm:26000,trend:7.5,avg:2_600_000,school:8,transport:8, invest:82,income:'בינוני-גבוה' },
+    'ירושלים':       { ppqm:22000,trend:4.1,avg:2_200_000,school:7,transport:7, invest:74,income:'בינוני' },
+    'חיפה':          { ppqm:14000,trend:5.8,avg:1_400_000,school:7,transport:8, invest:71,income:'בינוני' },
+    'נתניה':         { ppqm:18000,trend:6.9,avg:1_800_000,school:7,transport:7, invest:75,income:'בינוני' },
+    'פתח תקווה':     { ppqm:19000,trend:7.1,avg:1_900_000,school:7,transport:7, invest:77,income:'בינוני' },
+    'ראשון לציון':   { ppqm:20000,trend:6.5,avg:2_000_000,school:8,transport:7, invest:78,income:'בינוני-גבוה' },
+    'הרצליה':        { ppqm:30000,trend:5.9,avg:3_100_000,school:9,transport:8, invest:85,income:'גבוה' },
+    'המרכז':         { ppqm:22000,trend:5.5,avg:2_000_000,school:7,transport:7, invest:76,income:'בינוני' },
+  };
+  const d = D[city] || D['המרכז'];
+  return {
+    address, city,
+    market_value: { price_per_sqm:d.ppqm, trend_pct:d.trend, trend_direction:'up', avg_deal_price:d.avg,
+      description:`מחירי הנדל"ן ב${city} ממשיכים לעלות עם ביקוש גבוה ומלאי נמוך. המחיר למ"ר עומד על ₪${d.ppqm.toLocaleString('he-IL')} בממוצע, עם עלייה של ${d.trend}% בשנה האחרונה.` },
+    schools: { overall_rating:d.school,
+      items:[
+        {name:`בי"ס ממלכתי ${city}`,type:'יסודי',distance:"200 מ'",rating:'A'},
+        {name:'חטיבת הביניים האזורית',type:'חטיבה',distance:"500 מ'",rating:'B'},
+        {name:'תיכון אזורי מקיף',type:'תיכון',distance:"850 מ'",rating:'B'},
+      ],
+      description:`האזור מכוסה ברשת בתי ספר איכותית. ציון חינוך ממוצע ${d.school}/10 — מהגבוהים בעיר.` },
+    transport: { accessibility_score:d.transport,
+      items:['קווי אוטובוס ישירים למרכז העיר','תחנת רכבת/רכבת קלה בסביבה הקרובה','גישה נוחה לכבישים ראשיים'],
+      description:`נגישות תחבורתית ${d.transport>=9?'מצוינת':'טובה מאוד'} — תחבורה ציבורית צפופה ועתידות להרחבה.` },
+    development: { activity_level: d.invest>=80?'גבוה':'בינוני',
+      projects:[
+        {name:'תמ"א 38/2',type:'תמ"א 38',status:'בתכנון מתקדם',impact:'positive'},
+        {name:'פינוי-בינוי מתחם ותיק',type:'פינוי בינוי',status:'אושר בוועדה',impact:'positive'},
+        {name:'הרחבת תשתיות תחבורה',type:'תשתיות',status:'בביצוע',impact:'positive'},
+      ],
+      description:`פעילות התחדשות עירונית ענפה. מספר פרויקטים של תמ"א 38 ופינוי-בינוי צפויים להעלות את ערך הנכסים.` },
+    demographics: { avg_age:36, dominant_group:'משפחות צעירות ואנשי מקצוע', income_level:d.income,
+      description:`האוכלוסייה מורכבת בעיקר ממשפחות בגילאי 28–45. רמת ההכנסה ${d.income} — מעל הממוצע הארצי.` },
+    investment_score: d.invest,
+    investment_summary:`האזור מהווה השקעה ${d.invest>=82?'מצוינת':'טובה מאוד'} לטווח הבינוני-ארוך עם פוטנציאל עלייה של ${d.trend}%+ בשנה.`,
+  };
+}
+
+app.post('/api/smart-neighbor', async (req, res) => {
+  const { address } = req.body;
+  if (!address) return res.status(400).json({ error: 'address is required' });
+
+  if (!process.env.ANTHROPIC_API_KEY) return res.json(mockNeighborReport(address));
+
+  try {
+    const stream = await anthropic.messages.stream({
+      model: 'claude-opus-4-7',
+      max_tokens: 2048,
+      thinking: { type: 'adaptive' },
+      system: `You are an expert Israeli real estate market analyst with deep knowledge of neighborhoods, schools, transport, urban development (TAMA 38, Pinui-Binui), and demographics across Israel.
+Generate detailed, realistic neighborhood intelligence reports in JSON.
+Return ONLY valid JSON — no markdown fences, no extra text.`,
+      messages: [{ role: 'user', content: `Generate a neighborhood intelligence report for: "${address}"
+
+Return this exact JSON structure (all text in Hebrew except field names):
+{
+  "address": "full address as given",
+  "city": "city name",
+  "market_value": {
+    "price_per_sqm": <integer ILS>,
+    "trend_pct": <float yearly % change>,
+    "trend_direction": "up"|"down"|"stable",
+    "avg_deal_price": <integer ILS>,
+    "description": "<2 sentences Hebrew>"
+  },
+  "schools": {
+    "overall_rating": <integer 1-10>,
+    "items": [{"name":"<Hebrew>","type":"יסודי|חטיבה|תיכון","distance":"<X מ'>","rating":"A|B|C"}],
+    "description": "<Hebrew>"
+  },
+  "transport": {
+    "accessibility_score": <integer 1-10>,
+    "items": ["<Hebrew line description>"],
+    "description": "<Hebrew>"
+  },
+  "development": {
+    "activity_level": "גבוה|בינוני|נמוך",
+    "projects": [{"name":"<Hebrew>","type":"תמ\"א 38|פינוי בינוי|תשתיות|מסחרי","status":"<Hebrew>","impact":"positive|negative|neutral"}],
+    "description": "<Hebrew>"
+  },
+  "demographics": {
+    "avg_age": <integer>,
+    "dominant_group": "<Hebrew>",
+    "income_level": "גבוה|בינוני-גבוה|בינוני|נמוך",
+    "description": "<Hebrew>"
+  },
+  "investment_score": <integer 1-100>,
+  "investment_summary": "<2 sentences Hebrew investment recommendation>"
+}` }]
+    });
+    const msg = await stream.finalMessage();
+    const text = msg.content.find(b => b.type === 'text')?.text ?? '';
+    const report = JSON.parse(text.trim());
+    res.json(report);
+  } catch (err) {
+    console.error('[smart-neighbor] error:', err.message);
+    // Fallback to mock on parse/API error
+    res.json(mockNeighborReport(address));
+  }
+});
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
