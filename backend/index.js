@@ -269,6 +269,107 @@ app.post('/api/ai-chat', async (req, res) => {
   setTimeout(() => res.json({ reply }), 400);
 });
 
+// ── Property Hunter / Matching Engine ────────────────────────────────────────
+
+const MOCK_PROPERTIES = [
+  { id: 'p1',  title: "קרקע 2 דונם — כפר יונה",      area: 'כפר יונה',   type: 'קרקע',    rooms: null, price: 2_850_000, source: 'יד2',    mins: 18   },
+  { id: 'p2',  title: "דירה 4 חד' — רמת גן",          area: 'רמת גן',     type: 'דירה',    rooms: 4,    price: 2_150_000, source: 'מדלן',   mins: 58   },
+  { id: 'p3',  title: "דירה 3 חד' — ת\"א צפון",       area: 'תל אביב',    type: 'דירה',    rooms: 3,    price: 1_750_000, source: 'winwin', mins: 182  },
+  { id: 'p4',  title: "פנטהאוז 5 חד' — הרצליה",       area: 'הרצליה',     type: 'פנטהאוז', rooms: 5,    price: 8_500_000, source: 'יד2',    mins: 5    },
+  { id: 'p5',  title: "דירת גן 4 חד' — פ\"ת",         area: 'פתח תקווה',  type: 'דירה',    rooms: 4,    price: 1_900_000, source: 'מדלן',   mins: 240  },
+  { id: 'p6',  title: "דירה 3 חד' — חיפה הדר",        area: 'חיפה',       type: 'דירה',    rooms: 3,    price: 1_200_000, source: 'יד2',    mins: 720  },
+  { id: 'p7',  title: "בית פרטי 6 חד' — נתניה",       area: 'נתניה',      type: 'בית',     rooms: 6,    price: 3_800_000, source: 'winwin', mins: 1440 },
+  { id: 'p8',  title: "דירה 2 חד' — ירושלים קטמון",  area: 'ירושלים',    type: 'דירה',    rooms: 2,    price: 1_650_000, source: 'מדלן',   mins: 30   },
+  { id: 'p9',  title: "דירה 5 חד' — גבעתיים",         area: 'גבעתיים',    type: 'דירה',    rooms: 5,    price: 3_200_000, source: 'יד2',    mins: 120  },
+  { id: 'p10', title: "נכס מסחרי 200מ\"ר — אשדוד",   area: 'אשדוד',      type: 'מסחרי',   rooms: null, price: 2_100_000, source: 'מדלן',   mins: 360  },
+  { id: 'p11', title: "דירה 4 חד' — גבעת שמואל",     area: 'גבעת שמואל', type: 'דירה',    rooms: 4,    price: 2_600_000, source: 'יד2',    mins: 90   },
+  { id: 'p12', title: "קוטג' 5 חד' — כפר סבא",       area: 'כפר סבא',    type: 'קוטג',    rooms: 5,    price: 3_100_000, source: 'winwin', mins: 210  },
+];
+
+function _parseBudget(msg) {
+  if (!msg) return null;
+  const mM = msg.match(/(\d[\d.,]*)M/i);
+  if (mM) return parseFloat(mM[1].replace(/,/g, '')) * 1_000_000;
+  const mMil = msg.match(/(\d[\d.,]*)\s*מיל/i);
+  if (mMil) return parseFloat(mMil[1].replace(/,/g, '')) * 1_000_000;
+  const mNum = msg.match(/(\d[\d,]{4,})/);
+  if (mNum) return Number(mNum[1].replace(/,/g, ''));
+  return null;
+}
+
+function _parseRooms(msg) {
+  const m = msg?.match(/(\d+)\s*(?:חדרים?|חד'|rooms?|غرف)/i);
+  return m ? parseInt(m[1]) : null;
+}
+
+function _parseArea(msg) {
+  const AREAS = ['תל אביב','חיפה','ירושלים','גבעתיים','פתח תקווה','רמת גן','הרצליה','נתניה','באר שבע','אשדוד','ראשון לציון','כפר יונה','גבעת שמואל','כפר סבא'];
+  for (const a of AREAS) { if ((msg || '').includes(a)) return a; }
+  const m = msg?.match(/(?:באזור\s+|ב)([א-ת"]{2,14})/);
+  return m?.[1] || null;
+}
+
+function calcScore(lead, prop) {
+  const budget = _parseBudget(lead.message);
+  const rooms  = _parseRooms(lead.message);
+  const area   = _parseArea(lead.message);
+  let score = 50;
+
+  if (budget) {
+    const ratio = prop.price / budget;
+    if (ratio <= 0.95)       score += 30;
+    else if (ratio <= 1.05)  score += 25;
+    else if (ratio <= 1.20)  score += 15;
+    else if (ratio <= 1.35)  score += 5;
+    else return 0;
+  } else { score += 8; }
+
+  if (area && prop.area) {
+    if (prop.area === area || prop.area.includes(area) || area.includes(prop.area)) score += 20;
+  }
+
+  if (rooms && prop.rooms) {
+    if (prop.rooms === rooms) score += 15;
+    else if (Math.abs(prop.rooms - rooms) === 1) score += 7;
+  }
+
+  return Math.min(score, 99);
+}
+
+app.get('/api/matches', (req, res) => {
+  const leads = db.prepare("SELECT * FROM leads WHERE status != 'Closed'").all();
+  const allMatches = [];
+
+  for (const lead of leads) {
+    for (const prop of MOCK_PROPERTIES) {
+      const score = calcScore(lead, prop);
+      if (score >= 65) allMatches.push({ id: `${lead.id}-${prop.id}`, lead, property: prop, score });
+    }
+  }
+
+  allMatches.sort((a, b) => b.score - a.score);
+
+  // Build per-lead profile summaries
+  const profileMap = {};
+  for (const m of allMatches) {
+    const lid = m.lead.id;
+    if (!profileMap[lid]) profileMap[lid] = { lead: m.lead, matches: [], best: m };
+    profileMap[lid].matches.push(m);
+    if (m.score > profileMap[lid].best.score) profileMap[lid].best = m;
+  }
+
+  const profiles = Object.values(profileMap)
+    .sort((a, b) => b.matches.length - a.matches.length)
+    .slice(0, 8)
+    .map(p => ({ lead: p.lead, match_count: p.matches.length, best_property: p.best.property, best_score: p.best.score }));
+
+  res.json({
+    matches: allMatches.slice(0, 15),
+    profiles,
+    stats: { sources: ['יד2', 'מדלן', 'winwin'], scan_interval: 'כל שעה', today_matches: allMatches.length, active_profiles: profiles.length },
+  });
+});
+
 // ── Health check (Render pings this to verify the service is up) ─────────────
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'AgentIQ CRM API' }));
 app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));

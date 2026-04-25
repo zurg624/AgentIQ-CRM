@@ -25,6 +25,7 @@ export const api = {
   bulkDelete:   (ids)          => request('/leads/bulk-delete',     { method: 'POST',   body: JSON.stringify({ ids }) }),
   assignAgent:  (id, agentId)  => request(`/leads/${id}/agent`,     { method: 'PATCH',  body: JSON.stringify({ agent_id: agentId }) }),
   changeStatus: (id, status)   => request(`/leads/${id}/status`,    { method: 'PATCH',  body: JSON.stringify({ status }) }),
+  getMatches:   ()             => request('/matches'),
   chat:         (message)      => request('/ai-chat',               { method: 'POST',   body: JSON.stringify({ message }) }),
 };
 
