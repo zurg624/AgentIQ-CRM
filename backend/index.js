@@ -4,8 +4,26 @@ const db = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
+
+// CORS — accept any origin listed in FRONTEND_URL (comma-separated),
+// plus localhost for development. Falls back to allow all if not set.
+const ALLOWED_ORIGINS = new Set([
+  'http://localhost:5173',
+  'http://localhost:4173',
+  ...( process.env.FRONTEND_URL
+        ? process.env.FRONTEND_URL.split(',').map(u => u.trim()).filter(Boolean)
+        : [] ),
+]);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, Postman, server-to-server)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.size === 0 || ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    // Also allow any *.vercel.app subdomain automatically
+    if (/^https:\/\/[^.]+\.vercel\.app$/.test(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
 }));
 app.use(express.json());
