@@ -134,9 +134,10 @@ app.post('/api/new-lead', async (req, res) => {
   const { name, phone, source = 'Manual', message = '', agent_id = null } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
+  const { owner_username = null } = req.body;
   const result = db.prepare(
-    'INSERT INTO leads (name, phone, source, message, agent_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(name, phone ?? null, source, message, agent_id);
+    'INSERT INTO leads (name, phone, source, message, agent_id, owner_username) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(name, phone ?? null, source, message, agent_id, owner_username);
 
   const leadId = result.lastInsertRowid;
 
@@ -368,6 +369,84 @@ app.get('/api/matches', (req, res) => {
     profiles,
     stats: { sources: ['יד2', 'מדלן', 'winwin'], scan_interval: 'כל שעה', today_matches: allMatches.length, active_profiles: profiles.length },
   });
+});
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'נדרש שם משתמש וסיסמה' });
+  const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
+  if (!user) return res.status(401).json({ error: 'שם משתמש או סיסמה שגויים' });
+  const token = Buffer.from(`${user.username}:${user.role}:${Date.now()}`).toString('base64');
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role, display_name: user.display_name } });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const auth = req.headers.authorization?.replace('Bearer ', '');
+  if (!auth) return res.status(401).json({ error: 'Not authenticated' });
+  try {
+    const [username] = Buffer.from(auth, 'base64').toString().split(':');
+    const user = db.prepare('SELECT id, username, role, display_name FROM users WHERE username = ?').get(username);
+    if (!user) return res.status(401).json({ error: 'Invalid token' });
+    res.json(user);
+  } catch { res.status(401).json({ error: 'Invalid token' }); }
+});
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+app.get('/api/settings', (req, res) => {
+  const rows = db.prepare('SELECT * FROM settings').all();
+  const obj = {};
+  rows.forEach(r => { obj[r.key] = r.value; });
+  res.json(obj);
+});
+
+app.put('/api/settings', (req, res) => {
+  const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  const tx = db.transaction(updates => {
+    for (const [k, v] of Object.entries(updates)) upsert.run(k, String(v));
+  });
+  tx(req.body);
+  const rows = db.prepare('SELECT * FROM settings').all();
+  const obj = {};
+  rows.forEach(r => { obj[r.key] = r.value; });
+  res.json(obj);
+});
+
+// ── System reset ──────────────────────────────────────────────────────────────
+app.post('/api/reset', (req, res) => {
+  db.prepare('DELETE FROM leads').run();
+  res.json({ ok: true });
+});
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+app.get('/api/reports', (req, res) => {
+  const leads = db.prepare('SELECT * FROM leads').all();
+
+  const byStatus = {};
+  const bySource = {};
+  for (const l of leads) {
+    byStatus[l.status] = (byStatus[l.status] || 0) + 1;
+    bySource[l.source] = (bySource[l.source] || 0) + 1;
+  }
+
+  const closedCount = byStatus['Closed'] || 0;
+  const AVG_DEAL = 2_200_000;
+  const COMMISSION = 0.02;
+  const estimatedRevenue = closedCount * AVG_DEAL * COMMISSION;
+
+  const monthly = db.prepare(`
+    SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+    FROM leads GROUP BY month ORDER BY month DESC LIMIT 6
+  `).all().reverse();
+
+  const agentLeaderboard = db.prepare(`
+    SELECT a.name, COUNT(l.id) as leads,
+           SUM(CASE WHEN l.status = 'Closed' THEN 1 ELSE 0 END) as closed
+    FROM agents a LEFT JOIN leads l ON l.agent_id = a.id
+    GROUP BY a.id ORDER BY closed DESC, leads DESC
+  `).all();
+
+  res.json({ total: leads.length, byStatus, bySource, closedCount, estimatedRevenue, monthly, agentLeaderboard });
 });
 
 // ── Health check (Render pings this to verify the service is up) ─────────────

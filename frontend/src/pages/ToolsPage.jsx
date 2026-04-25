@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 // ── Tax Brackets 2026 ─────────────────────────────────────────────────────────
 const FIRST_HOME = [
@@ -175,8 +175,18 @@ const DEFAULT = {
   monthlyRent: 7_000, monthlyExpenses: 500,
 };
 
-export default function ToolsPage() {
+export default function ToolsPage({ settings }) {
   const [inp, setInp]       = useState(DEFAULT);
+
+  // Apply system-wide calc defaults when settings load
+  useEffect(() => {
+    if (!settings) return;
+    setInp(prev => ({
+      ...prev,
+      brokeragePct: parseFloat(settings.brokerage_pct) || prev.brokeragePct,
+      lawyerPct:    parseFloat(settings.lawyer_pct)    || prev.lawyerPct,
+    }));
+  }, [settings]);
   const [history, setHistory] = useState(loadHistory);
   const [showHist, setShowHist] = useState(false);
   const [saveLabel, setSaveLabel] = useState('');

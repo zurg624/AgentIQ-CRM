@@ -1,22 +1,32 @@
 // Central API client — single source of truth for the backend URL.
-const BASE = 'https://agentiq-crm.onrender.com';
+const BASE = import.meta.env.VITE_API_URL || 'https://agentiq-crm.onrender.com';
+
+const getToken = () => (typeof localStorage !== 'undefined' ? localStorage.getItem('iq_token') : '') || '';
 
 async function request(path, options = {}) {
   const url = `${BASE}/api${path}`;
+  const token = getToken();
   console.log(`[AgentIQ] → ${options.method || 'GET'} ${url}`, options.body ?? '');
   const res = await fetch(url, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers ?? {}),
+    },
   });
   if (!res.ok) {
     const text = await res.text();
     console.error(`[AgentIQ] ✗ ${res.status} ${url}:`, text);
-    throw new Error(`${res.status}: ${text}`);
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch {}
+    throw new Error(msg);
   }
   return res.json();
 }
 
 export const api = {
+  // Leads
   getLeads:     ()             => request('/leads'),
   getAgents:    ()             => request('/agents'),
   createLead:   (body)         => request('/new-lead',              { method: 'POST',   body: JSON.stringify(body) }),
@@ -27,6 +37,20 @@ export const api = {
   changeStatus: (id, status)   => request(`/leads/${id}/status`,    { method: 'PATCH',  body: JSON.stringify({ status }) }),
   getMatches:   ()             => request('/matches'),
   chat:         (message)      => request('/ai-chat',               { method: 'POST',   body: JSON.stringify({ message }) }),
+
+  // Auth
+  login:        (username, password) => request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  getMe:        ()             => request('/auth/me'),
+
+  // Settings
+  getSettings:  ()             => request('/settings'),
+  updateSettings: (body)       => request('/settings',              { method: 'PUT',    body: JSON.stringify(body) }),
+
+  // Reports
+  getReports:   ()             => request('/reports'),
+
+  // Reset
+  resetSystem:  ()             => request('/reset',                 { method: 'POST' }),
 };
 
 export default api;

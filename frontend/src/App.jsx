@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import StatsBar from './components/StatsBar';
 import LeadDetailPanel from './components/LeadDetailPanel';
 import Toast from './components/Toast';
+import LoginPage from './pages/LoginPage';
 import CRMPage from './pages/CRMPage';
 import ChatbotPage from './pages/ChatbotPage';
 import FollowUpPage from './pages/FollowUpPage';
@@ -12,6 +13,8 @@ import LeadHunterPage from './pages/LeadHunterPage';
 import MarketingAIPage from './pages/MarketingAIPage';
 import PackagesPage from './pages/PackagesPage';
 import ToolsPage from './pages/ToolsPage';
+import SettingsPage from './pages/SettingsPage';
+import ReportsPage from './pages/ReportsPage';
 import api from './api';
 
 const SIMULATE_LEADS = [
@@ -21,21 +24,41 @@ const SIMULATE_LEADS = [
   { name: 'מרים אבו-עבד', phone: '058-6677889', source: 'WhatsApp', message: 'أبحث عن شقة في حيفا، 4 غرف، قريبة من المدارس' },
 ];
 
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+function loadStoredAuth() {
+  try {
+    const user  = JSON.parse(localStorage.getItem('iq_user')  || 'null');
+    const token = localStorage.getItem('iq_token') || '';
+    return { user, token };
+  } catch { return { user: null, token: '' }; }
+}
+
+function saveAuth(user, token) {
+  localStorage.setItem('iq_user',  JSON.stringify(user));
+  localStorage.setItem('iq_token', token);
+}
+
+function clearAuth() {
+  localStorage.removeItem('iq_user');
+  localStorage.removeItem('iq_token');
+}
 
 // ── App inner ─────────────────────────────────────────────────────────────────
-// Admin mode: run `localStorage.setItem('iq_admin','1')` in browser console to unlock
-const isAdmin = () => typeof localStorage !== 'undefined' && localStorage.getItem('iq_admin') === '1';
-
 function AppInner() {
   const { dir } = useLang();
-  const [page, setPage] = useState('crm');
-  const [adminMode] = useState(isAdmin);
-  const [leads, setLeads] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [selectedLead, setSelectedLead] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [page,     setPage]     = useState('crm');
+  const [leads,    setLeads]    = useState([]);
+  const [agents,   setAgents]   = useState([]);
+  const [loading,  setLoading]  = useState(true);
   const [simulating, setSimulating] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [selectedLead, setSelectedLead] = useState(null);
+  const [toast,    setToast]    = useState(null);
+  const [settings, setSettings] = useState(null);
+
+  // Auth state
+  const [user,  setUser]  = useState(() => loadStoredAuth().user);
+  const [token, setToken] = useState(() => loadStoredAuth().token);
+
   const toastTimer = useRef(null);
 
   const showToast = (lead) => {
@@ -44,14 +67,32 @@ function AppInner() {
     toastTimer.current = setTimeout(() => setToast(null), 5000);
   };
 
+  const handleLogin = (u, t) => {
+    saveAuth(u, t);
+    setUser(u); setToken(t);
+  };
+
+  const handleLogout = () => {
+    clearAuth();
+    setUser(null); setToken('');
+    setLeads([]); setSelectedLead(null);
+  };
+
+  // Load data after login
   useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    // Load leads+agents together; settings is optional (new endpoint, may 404 on old deploy)
     Promise.all([api.getLeads(), api.getAgents()])
       .then(([l, a]) => { setLeads(l); setAgents(a); })
       .catch(err => console.error('[AgentIQ] initial load failed:', err))
       .finally(() => setLoading(false));
-  }, []);
+    api.getSettings().then(setSettings).catch(() => {/* backend not yet deployed */});
+  }, [user]);
 
+  // SSE for new leads
   useEffect(() => {
+    if (!user) return;
     const BASE = import.meta.env.VITE_API_URL || 'https://agentiq-crm.onrender.com';
     const es = new EventSource(`${BASE}/api/events`);
     es.addEventListener('new-lead', (e) => {
@@ -65,11 +106,16 @@ function AppInner() {
     });
     return () => es.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     document.documentElement.setAttribute('dir', dir);
   }, [dir]);
+
+  // Filter leads by ownership (admin sees all, agents see only their own)
+  const visibleLeads = user?.role === 'admin'
+    ? leads
+    : leads.filter(l => !l.owner_username || l.owner_username === user?.username);
 
   const handleAssignAgent = (leadId, agentId) => {
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, agent_id: agentId } : l));
@@ -87,8 +133,7 @@ function AppInner() {
     setSimulating(true);
     const sample = SIMULATE_LEADS[Math.floor(Math.random() * SIMULATE_LEADS.length)];
     try {
-      await api.createLead(sample);
-      // Don't add to state here — SSE broadcast handles it (avoids duplicate key)
+      await api.createLead({ ...sample, owner_username: user?.username });
     } catch (err) {
       console.error('[AgentIQ] simulate failed:', err);
     } finally {
@@ -96,48 +141,57 @@ function AppInner() {
     }
   };
 
-  const refreshLeads = () => {
-    api.getLeads().then(setLeads).catch(console.error);
-  };
+  const refreshLeads = () => { api.getLeads().then(setLeads).catch(console.error); };
+
+  const systemName = settings?.system_name || 'AgentIQ';
+
+  // ── Show login if not authenticated ──────────────────────────────────────────
+  if (!user || !token) {
+    return <LoginPage onLogin={handleLogin} systemName={systemName} />;
+  }
 
   const sharedCRMProps = {
-    leads, agents, loading,
+    leads: visibleLeads, agents, loading,
     onAssignAgent: handleAssignAgent,
     onChangeStatus: handleChangeStatus,
     onSelectLead: setSelectedLead,
     onSimulate: handleSimulate,
     simulating,
     onRefresh: refreshLeads,
+    onShowSimulate: user.role === 'admin',
   };
 
   return (
-    <div className="flex min-h-screen dot-grid" dir={dir} style={{ paddingTop: '0' }}>
-      <Sidebar page={page} setPage={setPage} />
+    <div className="flex min-h-screen dot-grid" dir={dir}>
+      <Sidebar
+        page={page} setPage={setPage}
+        user={user} onLogout={handleLogout}
+        systemName={systemName}
+      />
 
-      {/* Mobile top-bar spacer */}
       <div className="md:hidden h-14 w-full fixed top-0 z-30" style={{ background: '#0b0f1e' }} />
 
-      <main className="flex-1 flex flex-col overflow-hidden" style={{ paddingTop: 0 }}>
-        {/* Mobile spacer */}
+      <main className="flex-1 flex flex-col overflow-hidden">
         <div className="h-14 md:hidden flex-shrink-0" />
+        {!loading && <StatsBar leads={visibleLeads} />}
 
-        {/* Top stats bar — always visible */}
-        {!loading && <StatsBar leads={leads} />}
-
-        {/* Page content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {page === 'crm'       && <CRMPage {...sharedCRMProps} onShowSimulate={adminMode} onRefresh={refreshLeads} />}
+          {page === 'crm'       && <CRMPage {...sharedCRMProps} />}
           {page === 'chatbot'   && <ChatbotPage />}
           {page === 'followup'  && (
-            <FollowUpPage leads={leads} agents={agents}
+            <FollowUpPage leads={visibleLeads} agents={agents}
               onAssignAgent={handleAssignAgent} onChangeStatus={handleChangeStatus}
               onSelectLead={setSelectedLead} />
           )}
           {page === 'shachen'   && <ShachenPage />}
-          {page === 'dealcalc'  && <ToolsPage />}
+          {page === 'dealcalc'  && <ToolsPage settings={settings} />}
           {page === 'hunter'    && <LeadHunterPage onImport={() => {}} />}
           {page === 'marketing' && <MarketingAIPage />}
           {page === 'packages'  && <PackagesPage />}
+          {page === 'reports'   && <ReportsPage systemName={systemName} />}
+          {page === 'settings'  && (
+            <SettingsPage settings={settings} onSettingsChange={setSettings} user={user} />
+          )}
         </div>
       </main>
 
