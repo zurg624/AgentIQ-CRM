@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import api from '../api';
 
 const GREETING = 'שלום! אני AgentIQ 🤖 — העוזר החכם שלך לנדל"ן ישראלי.\n\nשאל אותי על:\n• מס רכישה ועלויות עסקה\n• משכנתאות וריביות\n• תשואה על השקעות\n• אזורים ומחירי שוק\n• אסטרטגיית מו"מ';
 
@@ -26,14 +27,10 @@ export default function ChatbotPage() {
     setMessages(prev => [...prev, { role: 'user', text: msg }]);
     setLoading(true);
     try {
-      const res = await fetch('/api/ai-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
-      });
-      const { reply } = await res.json();
+      const { reply } = await api.chat(msg);
       setMessages(prev => [...prev, { role: 'ai', text: reply }]);
-    } catch {
+    } catch (err) {
+      console.error('[AgentIQ] chat error:', err);
       setMessages(prev => [...prev, { role: 'ai', text: 'שגיאת חיבור — נסה שוב.' }]);
     } finally {
       setLoading(false);

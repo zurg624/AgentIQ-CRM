@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import api from '../api';
 
 const MOCK_LEADS = [
   { id: 'fb1', source: 'Facebook', name: 'נועם שפירא', phone: '052-3344556', message: 'מחפש דירת 4 חדרים בגבעתיים, תקציב 3.5M', time: '8 דקות', avatar: 'נ' },
@@ -23,13 +24,11 @@ export default function LeadHunterPage({ onImport }) {
     if (imported.has(lead.id) || importing) return;
     setImporting(lead.id);
     try {
-      await fetch('/api/new-lead', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: lead.name, phone: lead.phone, source: lead.source, message: lead.message }),
-      });
+      await api.createLead({ name: lead.name, phone: lead.phone, source: lead.source, message: lead.message });
       setImported(prev => new Set([...prev, lead.id]));
       onImport?.();
+    } catch (err) {
+      console.error('[AgentIQ] import lead error:', err);
     } finally {
       setImporting(null);
     }

@@ -13,10 +13,7 @@ import LeadHunterPage from './pages/LeadHunterPage';
 import MarketingAIPage from './pages/MarketingAIPage';
 import PackagesPage from './pages/PackagesPage';
 import ToolsPage from './pages/ToolsPage';
-
-// In dev, VITE_API_URL is empty → Vite proxy handles /api → localhost:3001
-// In production, set VITE_API_URL=https://your-backend.onrender.com in Vercel
-const API = (import.meta.env.VITE_API_URL ?? '') + '/api';
+import api from './api';
 
 const SIMULATE_LEADS = [
   { name: 'יעל מזרחי',    phone: '052-1112233', source: 'Facebook', message: 'ראיתי את המודעה שלכם — מחפשת דירה 3 חדרים קרוב לרכבת, תקציב 1.8M' },
@@ -107,14 +104,15 @@ function AppInner() {
   };
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${API}/leads`).then(r => r.json()),
-      fetch(`${API}/agents`).then(r => r.json()),
-    ]).then(([l, a]) => { setLeads(l); setAgents(a); }).finally(() => setLoading(false));
+    Promise.all([api.getLeads(), api.getAgents()])
+      .then(([l, a]) => { setLeads(l); setAgents(a); })
+      .catch(err => console.error('[AgentIQ] initial load failed:', err))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    const es = new EventSource(`${API}/events`);
+    const BASE = import.meta.env.VITE_API_URL || 'https://agentiq-crm.onrender.com';
+    const es = new EventSource(`${BASE}/api/events`);
     es.addEventListener('new-lead', (e) => {
       const lead = JSON.parse(e.data);
       setLeads(prev => {
@@ -135,30 +133,23 @@ function AppInner() {
   const handleAssignAgent = (leadId, agentId) => {
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, agent_id: agentId } : l));
     if (selectedLead?.id === leadId) setSelectedLead(p => ({ ...p, agent_id: agentId }));
-    fetch(`${API}/leads/${leadId}/agent`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_id: agentId }),
-    });
+    api.assignAgent(leadId, agentId).catch(console.error);
   };
 
   const handleChangeStatus = (leadId, status) => {
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status } : l));
     if (selectedLead?.id === leadId) setSelectedLead(p => ({ ...p, status }));
-    fetch(`${API}/leads/${leadId}/status`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
+    api.changeStatus(leadId, status).catch(console.error);
   };
 
   const handleSimulate = async () => {
     setSimulating(true);
     const sample = SIMULATE_LEADS[Math.floor(Math.random() * SIMULATE_LEADS.length)];
     try {
-      await fetch(`${API}/new-lead`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sample),
-      });
+      await api.createLead(sample);
       // Don't add to state here — SSE broadcast handles it (avoids duplicate key)
+    } catch (err) {
+      console.error('[AgentIQ] simulate failed:', err);
     } finally {
       setSimulating(false);
     }

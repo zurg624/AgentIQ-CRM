@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import api from '../api';
 
 const PROP_TYPES = ['דירה', 'פנטהאוז', 'קוטג\'', 'דירת גן', 'בית פרטי', 'נכס מסחרי'];
 
@@ -24,14 +25,10 @@ export default function MarketingAIPage() {
 הפוסט צריך: כותרת נוצצת, תיאור הנכס, יתרונות המיקום, CTA ברור.`;
 
     try {
-      const res = await fetch('/api/ai-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: prompt }),
-      });
-      const { reply } = await res.json();
+      const { reply } = await api.chat(prompt);
       setResult(reply);
-    } catch {
+    } catch (err) {
+      console.error('[AgentIQ] marketing AI error:', err);
       setResult('שגיאה בחיבור — נסה שוב.');
     } finally {
       setLoading(false);
