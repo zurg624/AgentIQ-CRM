@@ -571,11 +571,54 @@ app.use('/api/ingest/apify',
 app.use('/api/properties', require('./routes/propertiesApi')());
 
 // POST /api/apify/run — trigger an Apify Actor run on demand
+//
+// Input resolution (first truthy source wins):
+//   1. req.body.startUrls  — passed explicitly from the frontend
+//   2. APIFY_START_URLS env — comma-separated list of FB group URLs set on Render
+//   3. Error 400           — user must configure at least one source
+//
+// Required Render env vars:
+//   APIFY_TOKEN     – Apify personal access token
+//   APIFY_ACTOR_ID  – Actor ID or "username/actor-name", e.g. "apify/facebook-groups-scraper"
+//   APIFY_START_URLS – comma-separated FB group URLs used as default when none supplied
 app.post('/api/apify/run', async (req, res) => {
   const token   = process.env.APIFY_TOKEN;
   const actorId = process.env.APIFY_ACTOR_ID;
   if (!token)   return res.status(503).json({ error: 'APIFY_TOKEN not configured on server' });
   if (!actorId) return res.status(503).json({ error: 'APIFY_ACTOR_ID not configured on server' });
+
+  // ── Build startUrls ────────────────────────────────────────────────────────
+  let startUrls = req.body?.startUrls; // may be [{url:…}, …] or null
+
+  // If the frontend sent a plain string URL, normalise it
+  if (typeof startUrls === 'string' && startUrls.trim()) {
+    startUrls = [{ url: startUrls.trim() }];
+  }
+
+  // Fall back to APIFY_START_URLS env var
+  if (!Array.isArray(startUrls) || startUrls.length === 0) {
+    const envUrls = process.env.APIFY_START_URLS;
+    if (envUrls) {
+      startUrls = envUrls
+        .split(',')
+        .map(u => u.trim())
+        .filter(Boolean)
+        .map(u => ({ url: u }));
+    }
+  }
+
+  if (!Array.isArray(startUrls) || startUrls.length === 0) {
+    return res.status(400).json({
+      error: 'No Facebook group URLs configured.',
+      fix:   'Set APIFY_START_URLS on Render (comma-separated FB group URLs), or pass startUrls in the request body.',
+    });
+  }
+
+  // Merge the resolved startUrls with any other actor-specific fields the
+  // caller may have sent (e.g. maxItems, proxy settings).
+  const actorInput = { ...(req.body || {}), startUrls };
+
+  console.log(`[apify/run] actor=${actorId} startUrls=${startUrls.map(u => u.url).join(', ')}`);
 
   try {
     const runRes = await fetch(
@@ -583,7 +626,7 @@ app.post('/api/apify/run', async (req, res) => {
       {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(req.body || {}),
+        body:    JSON.stringify(actorInput),
       }
     );
     const runData = await runRes.json();
@@ -593,7 +636,7 @@ app.post('/api/apify/run', async (req, res) => {
         detail: runData,
       });
     }
-    console.log(`[apify/run] started actor ${actorId} — runId=${runData.data?.id}`);
+    console.log(`[apify/run] started — runId=${runData.data?.id}`);
     res.json({ ok: true, runId: runData.data?.id, status: runData.data?.status, actorId });
   } catch (err) {
     res.status(500).json({ error: err.message });
