@@ -406,9 +406,12 @@ function normalizeIngestBody(body) {
   return [];
 }
 
-// Resolve the ingest API key: env var takes precedence over DB-stored key
+// Resolve the ingest API key.
+// Checks (in order): INGEST_API_KEY env → API_KEY env → DB-stored key.
+// This matches whatever variable name is already set on Render.
 function getExpectedKey() {
   if (process.env.INGEST_API_KEY) return process.env.INGEST_API_KEY;
+  if (process.env.API_KEY)        return process.env.API_KEY;
   try {
     return db.prepare("SELECT value FROM settings WHERE key = 'ingest_api_key'").get()?.value || null;
   } catch { return null; }
