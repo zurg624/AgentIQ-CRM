@@ -46,6 +46,14 @@ export const api = {
   ingestApify:          (body)  => request('/ingest/apify',       { method: 'POST', body: JSON.stringify(body) }),
   ingestTest:           ()      => request('/ingest/test',        { method: 'POST' }),
   getIngestedProperties:()      => request('/ingest/properties'),
+
+  // Lead Hunter — Apify + Supabase properties
+  runApifyScan:         (body)  => request('/apify/run',              { method: 'POST', body: JSON.stringify(body || {}) }),
+  getProperties:        ()      => request('/properties'),
+  updateProperty:       (id, b) => request(`/properties/${id}`,       { method: 'PUT',    body: JSON.stringify(b) }),
+  deleteProperty:       (id)    => request(`/properties/${id}`,       { method: 'DELETE' }),
+  assignPropertyAgent:  (id, n) => request(`/properties/${id}/assign`,{ method: 'PATCH',  body: JSON.stringify({ assigned_to: n }) }),
+
   getNotifications:     ()      => request('/notifications'),
   markNotifRead:        (id)    => request(`/notifications/${id}/read`, { method: 'PATCH' }),
   markAllNotifsRead:    ()      => request('/notifications/read-all',   { method: 'POST' }),

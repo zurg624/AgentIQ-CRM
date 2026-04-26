@@ -567,6 +567,39 @@ app.use('/api/ingest/apify',
   require('./routes/ingestApify')({ db, broadcast, ingestOneProperty })
 );
 
+// /api/properties — Supabase-backed CRUD (list, update, delete, assign)
+app.use('/api/properties', require('./routes/propertiesApi')());
+
+// POST /api/apify/run — trigger an Apify Actor run on demand
+app.post('/api/apify/run', async (req, res) => {
+  const token   = process.env.APIFY_TOKEN;
+  const actorId = process.env.APIFY_ACTOR_ID;
+  if (!token)   return res.status(503).json({ error: 'APIFY_TOKEN not configured on server' });
+  if (!actorId) return res.status(503).json({ error: 'APIFY_ACTOR_ID not configured on server' });
+
+  try {
+    const runRes = await fetch(
+      `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(req.body || {}),
+      }
+    );
+    const runData = await runRes.json();
+    if (!runRes.ok) {
+      return res.status(runRes.status).json({
+        error:  runData?.error?.message || 'Apify API error',
+        detail: runData,
+      });
+    }
+    console.log(`[apify/run] started actor ${actorId} — runId=${runData.data?.id}`);
+    res.json({ ok: true, runId: runData.data?.id, status: runData.data?.status, actorId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/ingest/properties — list of recently ingested properties
 app.get('/api/ingest/properties', (req, res) => {
   const limit = parseInt(req.query.limit) || 20;
