@@ -11,8 +11,8 @@ try {
   process.exit(1);
 }
 
-// Supabase / PostgreSQL — active when DATABASE_URL is set
-const { ensurePgSchema, pgInsertProperty } = require('./pgClient');
+// Supabase — active when SUPABASE_URL + SUPABASE_SERVICE_KEY are set
+const { ensurePgSchema, pgInsertProperty, checkSupabaseHealth } = require('./pgClient');
 ensurePgSchema(); // verify / create table on startup
 
 const app = express();
@@ -878,22 +878,12 @@ app.get('/api/reports', (req, res) => {
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'AgentIQ CRM API' }));
 app.get('/health', async (req, res) => {
-  const { getPool } = require('./pgClient');
-  let pgStatus = 'not configured';
-  try {
-    const p = await getPool();
-    if (p) {
-      await p.query('SELECT 1');
-      pgStatus = 'connected';
-    }
-  } catch (e) {
-    pgStatus = `error: ${e.message}`;
-  }
+  const health = await checkSupabaseHealth();
   res.json({
     status: 'ok',
     uptime: Math.round(process.uptime()),
     sqlite: 'ok',
-    supabase: pgStatus,
+    supabase: health.ok ? 'connected' : (health.reason || 'not configured'),
     ingest_key_set: !!(process.env.INGEST_API_KEY || process.env.API_KEY ||
       db.prepare("SELECT value FROM settings WHERE key='ingest_api_key'").get()?.value),
     endpoints: {

@@ -1,109 +1,70 @@
 /**
- * Supabase / PostgreSQL client — with forced IPv4 resolution.
+ * Supabase client — uses @supabase/supabase-js (REST/HTTP).
  *
- * Render's network blocks outbound IPv6. The pg library picks the AAAA record
- * → ENETUNREACH. Fix: resolve the hostname to an IPv4 address manually with
- * dns.resolve4() and pass the raw IP to the Pool instead of the hostname.
+ * This intentionally avoids raw pg/TCP connections because Render's network
+ * blocks outbound IPv6, and Supabase's db hostname resolves to an IPv6 address.
+ * The JS client talks over HTTPS (port 443) instead — zero socket issues.
  */
 
-const { Pool }   = require('pg');
-const dns        = require('dns').promises;
+const { createClient } = require('@supabase/supabase-js');
 
-let pool         = null;
-let _poolPromise = null; // resolves when the pool is ready (or failed)
+const SUPABASE_URL         = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-async function _init() {
-  const connStr = process.env.DATABASE_URL;
-  if (!connStr) {
-    console.log('[pg] DATABASE_URL not set — SQLite-only mode (local dev)');
-    return;
-  }
+let supabase = null;
 
-  try {
-    const parsed   = new URL(connStr);
-    const hostname = parsed.hostname;
-    const port     = parseInt(parsed.port) || 5432;
-    const database = parsed.pathname.replace(/^\//, '');
-    const user     = decodeURIComponent(parsed.username);
-    const password = decodeURIComponent(parsed.password);
-
-    // ── Force IPv4 ─────────────────────────────────────────────────────────
-    // pg uses net.connect() which honours getaddrinfo() ordering.
-    // On Render that ordering returns IPv6 first → ENETUNREACH.
-    // dns.resolve4() bypasses getaddrinfo entirely and returns only A records.
-    let host = hostname;
-    try {
-      const [ipv4] = await dns.resolve4(hostname);
-      host = ipv4;
-      console.log(`[pg] ${hostname} → ${ipv4} (IPv4 forced)`);
-    } catch (dnsErr) {
-      console.warn(`[pg] IPv4 DNS lookup failed for ${hostname}: ${dnsErr.message} — falling back to hostname`);
-    }
-
-    pool = new Pool({
-      host,
-      port,
-      database,
-      user,
-      password,
-      ssl:                 { rejectUnauthorized: false },
-      max:                 5,
-      idleTimeoutMillis:   30_000,
-      connectionTimeoutMillis: 8_000,
-    });
-
-    pool.on('error', err => console.error('[pg] pool error:', err.message));
-
-    // Verify the connection works
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-    console.log('[pg] Connected to Supabase ✓');
-
-  } catch (err) {
-    console.error('[pg] Connection FAILED:', err.message);
-    pool = null;
-  }
-}
-
-// Start connecting immediately when the module loads
-_poolPromise = _init();
-
-/**
- * Returns the Pool once initialisation is complete.
- * Awaiting this is safe even if called before _init() resolves.
- */
-async function getPool() {
-  await _poolPromise;
-  return pool;
+if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    auth: { persistSession: false },
+  });
+  console.log('[supabase] Client initialised ✓');
+} else {
+  console.log('[supabase] SUPABASE_URL / SUPABASE_SERVICE_KEY not set — Supabase disabled');
 }
 
 /**
  * Ensures the `properties` table exists in Supabase.
+ * Uses raw SQL via the rpc helper if the table doesn't exist yet.
+ * (The table can also be created manually in the Supabase dashboard — that's fine too.)
  */
 async function ensurePgSchema() {
-  const p = await getPool();
-  if (!p) return;
+  if (!supabase) return;
   try {
-    await p.query(`
-      CREATE TABLE IF NOT EXISTS properties (
-        id          SERIAL PRIMARY KEY,
-        title       TEXT    NOT NULL,
-        price       BIGINT  NOT NULL,
-        city        TEXT,
-        area        TEXT,
-        type        TEXT,
-        rooms       NUMERIC,
-        sqm         INTEGER,
-        url         TEXT,
-        source      TEXT    NOT NULL DEFAULT 'API',
-        description TEXT,
-        ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    console.log('[pg] Schema verified ✓');
+    // Quick probe: if the table exists this returns 0 rows, not an error.
+    const { error } = await supabase.from('properties').select('id').limit(1);
+    if (!error) {
+      console.log('[supabase] properties table found ✓');
+      return;
+    }
+
+    // Table missing — create it via SQL RPC
+    console.log('[supabase] Creating properties table…');
+    const { error: rpcErr } = await supabase.rpc('exec_sql', {
+      sql: `
+        CREATE TABLE IF NOT EXISTS properties (
+          id          SERIAL PRIMARY KEY,
+          title       TEXT    NOT NULL,
+          price       BIGINT  NOT NULL,
+          city        TEXT,
+          area        TEXT,
+          type        TEXT,
+          rooms       NUMERIC,
+          sqm         INTEGER,
+          url         TEXT,
+          source      TEXT    NOT NULL DEFAULT 'API',
+          description TEXT,
+          ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `,
+    });
+    if (rpcErr) {
+      console.warn('[supabase] Could not auto-create table via RPC:', rpcErr.message);
+      console.warn('[supabase] Please create the table manually in the Supabase dashboard.');
+    } else {
+      console.log('[supabase] properties table created ✓');
+    }
   } catch (err) {
-    console.error('[pg] Schema check failed:', err.message);
+    console.error('[supabase] ensurePgSchema error:', err.message);
   }
 }
 
@@ -112,20 +73,49 @@ async function ensurePgSchema() {
  * Returns the inserted row, or null on error / no connection.
  */
 async function pgInsertProperty({ title, price, city, area, type, rooms, sqm, url, source, description }) {
-  const p = await getPool();
-  if (!p) return null;
+  if (!supabase) return null;
   try {
-    const { rows } = await p.query(
-      `INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [title, Number(price), city||null, area||null, type||null,
-       rooms||null, sqm||null, url||null, source||'API', description||null]
-    );
-    return rows[0] || null;
+    const { data, error } = await supabase
+      .from('properties')
+      .insert([{
+        title,
+        price:       Number(price),
+        city:        city        || null,
+        area:        area        || null,
+        type:        type        || null,
+        rooms:       rooms       || null,
+        sqm:         sqm         || null,
+        url:         url         || null,
+        source:      source      || 'API',
+        description: description || null,
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[supabase] INSERT properties failed:', error.message);
+      return null;
+    }
+    return data;
   } catch (err) {
-    console.error('[pg] INSERT properties failed:', err.message);
+    console.error('[supabase] INSERT properties exception:', err.message);
     return null;
   }
 }
 
-module.exports = { getPool, ensurePgSchema, pgInsertProperty };
+/**
+ * Returns true if the Supabase client is configured and reachable.
+ * Used by GET /health.
+ */
+async function checkSupabaseHealth() {
+  if (!supabase) return { ok: false, reason: 'not configured' };
+  try {
+    const { error } = await supabase.from('properties').select('id').limit(1);
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+module.exports = { supabase, ensurePgSchema, pgInsertProperty, checkSupabaseHealth };
