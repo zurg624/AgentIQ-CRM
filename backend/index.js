@@ -562,87 +562,10 @@ app.post('/api/ingest/property', async (req, res) => {
   });
 });
 
-/**
- * POST /api/ingest/apify — dedicated endpoint for Apify HTTP Integration.
- *
- * Apify can send its dataset in several ways depending on how you configure
- * the HTTP Integration. All common shapes are handled:
- *
- *   1. Apify HTTP Integration "Send dataset as JSON body" → array at root
- *   2. Apify Webhook payload               → { resource, eventType, … }
- *      (we ignore these — no dataset in the webhook body itself)
- *   3. Custom actor output                 → any nested shape
- *
- * No API key required on this endpoint — secure it via Render's network if needed.
- */
-app.post('/api/ingest/apify', async (req, res) => {
-  console.log('[ingest/apify] received, keys:', Object.keys(req.body || {}).join(', '));
-  console.log('[ingest/apify] body preview:', JSON.stringify(req.body).slice(0, 400));
-
-  // Apify webhook event (no data payload, just a trigger)
-  if (req.body?.eventType) {
-    const status = req.body.resource?.status;
-    console.log(`[ingest/apify] Apify webhook event: ${req.body.eventType}, run status: ${status}`);
-    // Acknowledge immediately — we can't pull dataset from webhook body
-    return res.json({
-      received: true,
-      note: 'Apify webhook event acknowledged. To send property data, use "Send dataset as JSON body" in the HTTP Integration settings.',
-    });
-  }
-
-  const items = normalizeIngestBody(req.body);
-  console.log(`[ingest/apify] ${items.length} item(s) after normalization`);
-
-  if (items.length === 0) {
-    return res.status(400).json({
-      error: 'No property items found in payload.',
-      hint: 'In Apify → HTTP Integration, set "Payload format" to "Dataset: JSON" so the full dataset array is sent in the request body.',
-      received_keys: Object.keys(req.body || {}),
-    });
-  }
-
-  const results = [];
-  for (const item of items) {
-    // Apify actors may use different field names — normalise common variants
-    const normalised = {
-      title:       item.title       || item.name        || item.headline   || item.propertyTitle || '',
-      price:       item.price       || item.askingPrice  || item.cost       || item.priceILS      || 0,
-      city:        item.city        || item.location     || item.cityName   || null,
-      area:        item.area        || item.neighborhood || item.district   || null,
-      type:        item.type        || item.propertyType || item.category   || null,
-      rooms:       item.rooms       || item.roomCount    || item.bedrooms   || null,
-      sqm:         item.sqm         || item.squareMeters || item.size       || null,
-      url:         item.url         || item.link         || item.detailUrl  || null,
-      source:      item.source      || item.platform     || 'Apify',
-      description: item.description || item.details      || item.text       || null,
-    };
-
-    if (!normalised.title || !normalised.price) {
-      console.warn('[ingest/apify] skipping — missing title/price after normalisation:', JSON.stringify(item).slice(0,150));
-      results.push({ skipped: true, reason: 'missing title or price', raw_item: item });
-      continue;
-    }
-
-    try {
-      const r = await ingestOneProperty(normalised);
-      results.push(r);
-      console.log(`[ingest/apify] ✓ "${normalised.title}" price=${normalised.price} matches=${r.matches.length}`);
-    } catch (err) {
-      console.error('[ingest/apify] error:', err.message);
-      results.push({ error: err.message, item: normalised });
-    }
-  }
-
-  const ok = results.filter(r => r.property);
-  console.log(`[ingest/apify] done — ${ok.length}/${items.length} saved, ${ok.reduce((s,r)=>s+(r.matches?.length||0),0)} match notifications`);
-
-  res.status(201).json({
-    processed: ok.length,
-    skipped:   results.filter(r => r.skipped).length,
-    total_matches: ok.reduce((s, r) => s + (r.matches?.length || 0), 0),
-    results,
-  });
-});
+// POST /api/ingest/apify — Apify webhook: fetches dataset from Apify API, upserts to Supabase
+app.use('/api/ingest/apify',
+  require('./routes/ingestApify')({ db, broadcast, ingestOneProperty })
+);
 
 // GET /api/ingest/properties — list of recently ingested properties
 app.get('/api/ingest/properties', (req, res) => {
