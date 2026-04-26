@@ -878,26 +878,28 @@ app.get('/api/reports', (req, res) => {
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'AgentIQ CRM API' }));
 app.get('/health', async (req, res) => {
-  const { pool } = require('./pgClient');
+  const { getPool } = require('./pgClient');
   let pgStatus = 'not configured';
-  if (pool) {
-    try {
-      await pool.query('SELECT 1');
+  try {
+    const p = await getPool();
+    if (p) {
+      await p.query('SELECT 1');
       pgStatus = 'connected';
-    } catch (e) {
-      pgStatus = `error: ${e.message}`;
     }
+  } catch (e) {
+    pgStatus = `error: ${e.message}`;
   }
   res.json({
     status: 'ok',
     uptime: Math.round(process.uptime()),
     sqlite: 'ok',
     supabase: pgStatus,
-    ingest_key_set: !!(process.env.INGEST_API_KEY || db.prepare("SELECT value FROM settings WHERE key='ingest_api_key'").get()?.value),
+    ingest_key_set: !!(process.env.INGEST_API_KEY || process.env.API_KEY ||
+      db.prepare("SELECT value FROM settings WHERE key='ingest_api_key'").get()?.value),
     endpoints: {
-      ingest_single:  'POST /api/ingest/property',
-      ingest_apify:   'POST /api/ingest/apify',
-      ingest_test:    'POST /api/ingest/test',
+      ingest_single: 'POST /api/ingest/property',
+      ingest_apify:  'POST /api/ingest/apify',
+      ingest_test:   'POST /api/ingest/test',
     },
   });
 });

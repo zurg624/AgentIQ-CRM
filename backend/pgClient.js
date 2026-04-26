@@ -1,52 +1,91 @@
 /**
- * Supabase / PostgreSQL client.
- * Active only when DATABASE_URL is set (Render production).
- * Falls back to null so the rest of the code can do `if (pool) { ... }`.
+ * Supabase / PostgreSQL client — with forced IPv4 resolution.
+ *
+ * Render's network blocks outbound IPv6. The pg library picks the AAAA record
+ * → ENETUNREACH. Fix: resolve the hostname to an IPv4 address manually with
+ * dns.resolve4() and pass the raw IP to the Pool instead of the hostname.
  */
 
-// Force IPv4 — Render's network blocks outbound IPv6 connections to Supabase.
-// Without this, dns.lookup() picks the AAAA (IPv6) record → ENETUNREACH.
-require('dns').setDefaultResultOrder('ipv4first');
+const { Pool }   = require('pg');
+const dns        = require('dns').promises;
 
-const { Pool } = require('pg');
+let pool         = null;
+let _poolPromise = null; // resolves when the pool is ready (or failed)
 
-let pool = null;
+async function _init() {
+  const connStr = process.env.DATABASE_URL;
+  if (!connStr) {
+    console.log('[pg] DATABASE_URL not set — SQLite-only mode (local dev)');
+    return;
+  }
 
-if (process.env.DATABASE_URL) {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // required for Supabase
-    max: 5,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
-  });
+  try {
+    const parsed   = new URL(connStr);
+    const hostname = parsed.hostname;
+    const port     = parseInt(parsed.port) || 5432;
+    const database = parsed.pathname.replace(/^\//, '');
+    const user     = decodeURIComponent(parsed.username);
+    const password = decodeURIComponent(parsed.password);
 
-  pool.on('error', (err) => {
-    console.error('[pg] unexpected pool error:', err.message);
-  });
+    // ── Force IPv4 ─────────────────────────────────────────────────────────
+    // pg uses net.connect() which honours getaddrinfo() ordering.
+    // On Render that ordering returns IPv6 first → ENETUNREACH.
+    // dns.resolve4() bypasses getaddrinfo entirely and returns only A records.
+    let host = hostname;
+    try {
+      const [ipv4] = await dns.resolve4(hostname);
+      host = ipv4;
+      console.log(`[pg] ${hostname} → ${ipv4} (IPv4 forced)`);
+    } catch (dnsErr) {
+      console.warn(`[pg] IPv4 DNS lookup failed for ${hostname}: ${dnsErr.message} — falling back to hostname`);
+    }
 
-  // Test connection on startup
-  pool.connect()
-    .then(client => {
-      console.log('[pg] Connected to Supabase ✓');
-      client.release();
-    })
-    .catch(err => {
-      console.error('[pg] Connection FAILED:', err.message);
-      console.error('[pg] Check DATABASE_URL env var on Render');
+    pool = new Pool({
+      host,
+      port,
+      database,
+      user,
+      password,
+      ssl:                 { rejectUnauthorized: false },
+      max:                 5,
+      idleTimeoutMillis:   30_000,
+      connectionTimeoutMillis: 8_000,
     });
-} else {
-  console.log('[pg] DATABASE_URL not set — using SQLite only (local dev mode)');
+
+    pool.on('error', err => console.error('[pg] pool error:', err.message));
+
+    // Verify the connection works
+    const client = await pool.connect();
+    await client.query('SELECT 1');
+    client.release();
+    console.log('[pg] Connected to Supabase ✓');
+
+  } catch (err) {
+    console.error('[pg] Connection FAILED:', err.message);
+    pool = null;
+  }
+}
+
+// Start connecting immediately when the module loads
+_poolPromise = _init();
+
+/**
+ * Returns the Pool once initialisation is complete.
+ * Awaiting this is safe even if called before _init() resolves.
+ */
+async function getPool() {
+  await _poolPromise;
+  return pool;
 }
 
 /**
  * Ensures the `properties` table exists in Supabase.
- * Safe to call multiple times — uses CREATE TABLE IF NOT EXISTS.
  */
 async function ensurePgSchema() {
-  if (!pool) return;
+  const p = await getPool();
+  if (!p) return;
   try {
-    await pool.query(`
+    await p.query(`
       CREATE TABLE IF NOT EXISTS properties (
         id          SERIAL PRIMARY KEY,
         title       TEXT    NOT NULL,
@@ -69,18 +108,18 @@ async function ensurePgSchema() {
 }
 
 /**
- * Insert a single property into Supabase properties table.
- * Returns the inserted row or null on error.
+ * Insert a single property into Supabase.
+ * Returns the inserted row, or null on error / no connection.
  */
 async function pgInsertProperty({ title, price, city, area, type, rooms, sqm, url, source, description }) {
-  if (!pool) return null;
+  const p = await getPool();
+  if (!p) return null;
   try {
-    const { rows } = await pool.query(
+    const { rows } = await p.query(
       `INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING *`,
-      [title, Number(price), city || null, area || null, type || null,
-       rooms || null, sqm || null, url || null, source || 'API', description || null]
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [title, Number(price), city||null, area||null, type||null,
+       rooms||null, sqm||null, url||null, source||'API', description||null]
     );
     return rows[0] || null;
   } catch (err) {
@@ -89,4 +128,4 @@ async function pgInsertProperty({ title, price, city, area, type, rooms, sqm, ur
   }
 }
 
-module.exports = { pool, ensurePgSchema, pgInsertProperty };
+module.exports = { getPool, ensurePgSchema, pgInsertProperty };
