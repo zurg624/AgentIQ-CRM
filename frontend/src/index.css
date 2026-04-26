@@ -120,17 +120,70 @@ body {
 .mobile-nav {
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  background: rgba(6, 9, 18, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid rgba(234,179,8,0.1);
+  background: rgba(6, 9, 18, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(234,179,8,0.15);
   z-index: 50;
   display: none;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 @media (max-width: 768px) {
   .mobile-nav { display: flex; }
   .desktop-sidebar { display: none; }
-  main { padding-bottom: 70px; }
+  main { padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ── Touch-friendly targets ───────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Minimum 44px tap target for all interactive elements */
+  button, a, select, input[type="checkbox"], input[type="radio"] {
+    min-height: 44px;
+  }
+  /* Inline/small elements keep natural height */
+  .tap-sm { min-height: unset !important; }
+
+  /* Bigger slider thumb on mobile */
+  input[type="range"]::-webkit-slider-thumb {
+    width: 28px !important;
+    height: 28px !important;
+    margin-top: -12px;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  /* CRM table rows: more breathing room */
+  .crm-table-row td { padding-top: 14px !important; padding-bottom: 14px !important; }
+
+  /* Cards stack full-width */
+  .card { border-radius: 16px; }
+}
+
+/* ── Lead card (mobile CRM) ───────────────────────────────────── */
+.lead-card {
+  background: rgba(15,20,40,0.85);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.lead-card:active {
+  border-color: rgba(234,179,8,0.3);
+  box-shadow: 0 0 0 1px rgba(234,179,8,0.12);
+}
+
+/* ── Toast above mobile nav ───────────────────────────────────── */
+@media (max-width: 768px) {
+  .toast-container {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+  }
 }
 
 /* ── Stat card hover ──────────────────────────────────────────── */

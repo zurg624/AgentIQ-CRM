@@ -251,6 +251,94 @@ function DeleteConfirm({ count, onConfirm, onCancel }) {
   );
 }
 
+// ── Mobile Lead Card ──────────────────────────────────────────────────────────
+
+function LeadCard({ lead, onChangeStatus, onEdit, onNotes, onDelete }) {
+  const statusInfo = STATUS_MAP[lead.status] || STATUS_MAP['New'];
+  const phone = lead.phone?.replace(/\D/g, '') || '';
+  const waPhone = phone.startsWith('0') ? '972' + phone.slice(1) : phone;
+
+  return (
+    <div className="lead-card p-4 space-y-3">
+      {/* Row 1: avatar + name + rank */}
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-base flex-shrink-0"
+          style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', boxShadow: '0 0 12px rgba(99,102,241,0.3)' }}>
+          {(lead.name || '?')[0].toUpperCase()}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-white text-sm truncate">{lead.name}</div>
+          <div className="text-xs font-mono mt-0.5" style={{ color: '#64748b' }}>{lead.phone}</div>
+        </div>
+        <RankBadge budget={lead.budget} />
+      </div>
+
+      {/* Row 2: search + budget + time */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {lead.search && lead.search !== '—' && (
+          <span className="text-xs px-2.5 py-1 rounded-full"
+            style={{ background: 'rgba(99,102,241,0.12)', color: '#a5b4fc' }}>
+            🔍 {lead.search}
+          </span>
+        )}
+        {lead.budget && (
+          <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
+            style={{ background: 'rgba(245,158,11,0.1)', color: '#fbbf24' }}>
+            ₪{(lead.budget / 1_000_000).toFixed(1)}M
+          </span>
+        )}
+        <span className="text-[11px] mr-auto" style={{ color: '#334155' }}>{timeAgo(lead.created_at)}</span>
+      </div>
+
+      {/* Row 3: status selector */}
+      <select value={lead.status} onChange={e => onChangeStatus(lead.id, e.target.value)}
+        className="w-full text-sm font-semibold px-3 py-2.5 rounded-xl cursor-pointer border-0 outline-none"
+        style={{ background: statusInfo.bg, color: statusInfo.color }}>
+        {STATUS_KEYS.map(k => <option key={k} value={k}>{STATUS_MAP[k].label}</option>)}
+      </select>
+
+      {/* Row 4: quick-action buttons */}
+      <div className="grid grid-cols-3 gap-2">
+        <a href={`tel:${lead.phone}`}
+          className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold tap-sm"
+          style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)', textDecoration: 'none' }}>
+          📞 התקשר
+        </a>
+        <a href={`https://wa.me/${waPhone}`} target="_blank" rel="noreferrer"
+          className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold tap-sm"
+          style={{ background: 'rgba(37,211,102,0.12)', color: '#22c55e', border: '1px solid rgba(37,211,102,0.2)', textDecoration: 'none' }}>
+          💬 WhatsApp
+        </a>
+        <a href={`https://maps.google.com/?q=${encodeURIComponent(lead.search !== '—' ? lead.search : lead.name)}`}
+          target="_blank" rel="noreferrer"
+          className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold tap-sm"
+          style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)', textDecoration: 'none' }}>
+          🗺️ מפה
+        </a>
+      </div>
+
+      {/* Row 5: secondary actions */}
+      <div className="flex items-center gap-2 pt-1" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        <button onClick={() => onNotes(lead)}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium tap-sm"
+          style={{ background: 'rgba(255,255,255,0.04)', color: '#94a3b8' }}>
+          📝 הערות
+        </button>
+        <button onClick={() => onEdit(lead)}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium tap-sm"
+          style={{ background: 'rgba(255,255,255,0.04)', color: '#94a3b8' }}>
+          ✏️ עריכה
+        </button>
+        <button onClick={() => onDelete(lead.id)}
+          className="flex items-center justify-center py-2 px-3 rounded-xl text-xs font-medium tap-sm"
+          style={{ background: 'rgba(239,68,68,0.08)', color: '#f87171' }}>
+          🗑️
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, simulating, onShowSimulate, onRefresh }) {
@@ -392,13 +480,13 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
       </div>
 
       {/* Filters */}
-      <div className="px-4 md:px-6 pb-3 flex items-center gap-3 flex-wrap flex-shrink-0">
+      <div className="px-4 md:px-6 pb-3 flex items-center gap-2 md:gap-3 flex-wrap flex-shrink-0">
         {/* Search */}
-        <div className="relative">
+        <div className="relative flex-1 md:flex-none">
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="חיפוש לפי שם / טלפון..."
-            className="dark-input pr-8 pl-4 py-2 text-xs rounded-xl w-48" dir="rtl" />
-          <svg className="absolute right-2.5 top-2.5 w-3.5 h-3.5" style={{ color: '#475569' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            placeholder="חיפוש..."
+            className="dark-input pr-8 pl-4 py-2.5 text-sm rounded-xl w-full md:w-48" dir="rtl" />
+          <svg className="absolute right-2.5 top-3 w-3.5 h-3.5" style={{ color: '#475569' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
@@ -429,7 +517,7 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
         )}
       </div>
 
-      {/* Table */}
+      {/* Leads — table on desktop, cards on mobile */}
       <div className="flex-1 px-4 md:px-6 pb-6 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-48" style={{ color: '#334155' }}>טוען...</div>
@@ -440,114 +528,113 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
             <div className="text-xs" style={{ color: '#475569' }}>{leads.length === 0 ? 'לחץ "הוסף ליד" להתחיל' : 'נסה לשנות את הפילטרים'}</div>
           </div>
         ) : (
-          <div className="card rounded-2xl overflow-hidden mt-1" style={{ minWidth: 700 }}>
-            <table className="w-full text-sm" dir="rtl">
-              <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                  <th className="px-3 py-3 w-8">
-                    <input type="checkbox" checked={allChecked} onChange={toggleAll}
-                      className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer" />
-                  </th>
-                  {['שם', 'חיפוש', 'תקציב', 'דירוג AI', 'סטטוס', 'פגישה אחרונה', 'זמן', 'פעולות'].map(h => (
-                    <th key={h} className="text-right px-3 py-3 text-xs font-semibold"
-                      style={{ color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((lead, idx) => {
-                  const isSelected = selected.has(lead.id);
-                  const statusInfo = STATUS_MAP[lead.status] || STATUS_MAP['New'];
-                  return (
-                    <tr key={lead.id}
-                      style={{
-                        borderBottom: idx < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-                        background: isSelected ? 'rgba(99,102,241,0.06)' : undefined,
-                      }}
-                      className="transition-colors hover:bg-white/[0.02]">
-
-                      {/* Checkbox */}
-                      <td className="px-3 py-3">
-                        <input type="checkbox" checked={isSelected} onChange={() => toggleOne(lead.id)}
+          <>
+            {/* ── Desktop table (hidden on mobile) ── */}
+            <div className="hidden md:block">
+              <div className="card rounded-2xl overflow-hidden mt-1">
+                <table className="w-full text-sm" dir="rtl">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                      <th className="px-3 py-3 w-8">
+                        <input type="checkbox" checked={allChecked} onChange={toggleAll}
                           className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer" />
-                      </td>
-
-                      {/* שם */}
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0"
-                            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
-                            {(lead.name || '?')[0].toUpperCase()}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-white text-xs whitespace-nowrap">{lead.name}</div>
-                            <div className="text-[10px] font-mono" style={{ color: '#475569' }}>{lead.phone}</div>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* חיפוש */}
-                      <td className="px-3 py-3">
-                        <span className="text-xs" style={{ color: '#94a3b8' }}>{lead.search}</span>
-                      </td>
-
-                      {/* תקציב */}
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-semibold" style={{ color: '#e2e8f0' }}>
-                          {lead.budget ? `₪${(lead.budget / 1_000_000).toFixed(1)}M` : '—'}
-                        </span>
-                      </td>
-
-                      {/* דירוג AI */}
-                      <td className="px-3 py-3"><RankBadge budget={lead.budget} /></td>
-
-                      {/* סטטוס */}
-                      <td className="px-3 py-3">
-                        <select value={lead.status} onChange={e => onChangeStatus(lead.id, e.target.value)}
-                          className="text-[11px] font-semibold px-2 py-1 rounded-full cursor-pointer border-0 outline-none"
-                          style={{ background: statusInfo.bg, color: statusInfo.color }}>
-                          {STATUS_KEYS.map(k => <option key={k} value={k}>{STATUS_MAP[k].label}</option>)}
-                        </select>
-                      </td>
-
-                      {/* פגישה אחרונה */}
-                      <td className="px-3 py-3">
-                        <span className="text-[11px]" style={{ color: lead.last_contacted ? '#94a3b8' : '#334155' }}>
-                          {fmtDate(lead.last_contacted) || '—'}
-                        </span>
-                      </td>
-
-                      {/* זמן */}
-                      <td className="px-3 py-3">
-                        <span className="text-[11px]" style={{ color: '#475569' }}>{timeAgo(lead.created_at)}</span>
-                      </td>
-
-                      {/* פעולות */}
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <IconBtn title="הערות" onClick={() => setModal({ type: 'notes', lead })}>
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
-                          </IconBtn>
-                          <IconBtn title="עריכה" onClick={() => setModal({ type: 'edit', lead })}>
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                            </svg>
-                          </IconBtn>
-                          <IconBtn title="מחיקה" danger onClick={() => setDeleteTarget(lead.id)}>
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </IconBtn>
-                        </div>
-                      </td>
+                      </th>
+                      {['שם', 'חיפוש', 'תקציב', 'דירוג AI', 'סטטוס', 'פגישה אחרונה', 'זמן', 'פעולות'].map(h => (
+                        <th key={h} className="text-right px-3 py-3 text-xs font-semibold"
+                          style={{ color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {filtered.map((lead, idx) => {
+                      const isSelected = selected.has(lead.id);
+                      const statusInfo = STATUS_MAP[lead.status] || STATUS_MAP['New'];
+                      return (
+                        <tr key={lead.id}
+                          style={{
+                            borderBottom: idx < filtered.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                            background: isSelected ? 'rgba(99,102,241,0.06)' : undefined,
+                          }}
+                          className="crm-table-row transition-colors hover:bg-white/[0.02]">
+                          <td className="px-3 py-3">
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleOne(lead.id)}
+                              className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer" />
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0"
+                                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+                                {(lead.name || '?')[0].toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="font-semibold text-white text-xs whitespace-nowrap">{lead.name}</div>
+                                <div className="text-[10px] font-mono" style={{ color: '#475569' }}>{lead.phone}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3"><span className="text-xs" style={{ color: '#94a3b8' }}>{lead.search}</span></td>
+                          <td className="px-3 py-3">
+                            <span className="text-xs font-semibold" style={{ color: '#e2e8f0' }}>
+                              {lead.budget ? `₪${(lead.budget / 1_000_000).toFixed(1)}M` : '—'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3"><RankBadge budget={lead.budget} /></td>
+                          <td className="px-3 py-3">
+                            <select value={lead.status} onChange={e => onChangeStatus(lead.id, e.target.value)}
+                              className="text-[11px] font-semibold px-2 py-1 rounded-full cursor-pointer border-0 outline-none"
+                              style={{ background: statusInfo.bg, color: statusInfo.color }}>
+                              {STATUS_KEYS.map(k => <option key={k} value={k}>{STATUS_MAP[k].label}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-3">
+                            <span className="text-[11px]" style={{ color: lead.last_contacted ? '#94a3b8' : '#334155' }}>
+                              {fmtDate(lead.last_contacted) || '—'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3">
+                            <span className="text-[11px]" style={{ color: '#475569' }}>{timeAgo(lead.created_at)}</span>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <IconBtn title="הערות" onClick={() => setModal({ type: 'notes', lead })}>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </IconBtn>
+                              <IconBtn title="עריכה" onClick={() => setModal({ type: 'edit', lead })}>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                </svg>
+                              </IconBtn>
+                              <IconBtn title="מחיקה" danger onClick={() => setDeleteTarget(lead.id)}>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </IconBtn>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* ── Mobile cards (hidden on desktop) ── */}
+            <div className="md:hidden mt-2 space-y-3">
+              {filtered.map(lead => (
+                <LeadCard
+                  key={lead.id}
+                  lead={lead}
+                  onChangeStatus={onChangeStatus}
+                  onEdit={(l) => setModal({ type: 'edit', lead: l })}
+                  onNotes={(l) => setModal({ type: 'notes', lead: l })}
+                  onDelete={(id) => setDeleteTarget(id)}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
 

@@ -177,12 +177,28 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
       <div className="mobile-nav">
         {NAV.filter(n => MOBILE_NAV.includes(n.key)).map(({ key, label }) => {
           const [emoji, ...rest] = label.split(' ');
+          const isActive = page === key;
+          const unread = notifications.filter(n => !n.read).length;
+          const showBadge = key === 'crm' && unread > 0;
           return (
             <button key={key} onClick={() => setPage(key)}
-              className="flex-1 flex flex-col items-center py-2 text-center"
-              style={{ color: page === key ? '#fbbf24' : '#475569' }}>
-              <span className="text-lg">{emoji}</span>
-              <span className="text-[9px] mt-0.5 truncate w-full px-0.5">{rest.join(' ')}</span>
+              className="flex-1 flex flex-col items-center justify-center py-2 relative"
+              style={{ color: isActive ? '#fbbf24' : '#475569', minHeight: '60px' }}>
+              {/* Active indicator dot */}
+              {isActive && (
+                <span className="absolute top-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full"
+                  style={{ background: '#f59e0b' }} />
+              )}
+              <span className="text-xl relative">
+                {emoji}
+                {showBadge && (
+                  <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 rounded-full text-[8px] font-black flex items-center justify-center px-0.5"
+                    style={{ background: 'linear-gradient(135deg,#ef4444,#f97316)', color: 'white', lineHeight: 1 }}>
+                    {unread > 9 ? '9+' : unread}
+                  </span>
+                )}
+              </span>
+              <span className="text-[9px] mt-0.5 font-medium">{rest.join(' ')}</span>
             </button>
           );
         })}
