@@ -3,6 +3,11 @@
  * Active only when DATABASE_URL is set (Render production).
  * Falls back to null so the rest of the code can do `if (pool) { ... }`.
  */
+
+// Force IPv4 — Render's network blocks outbound IPv6 connections to Supabase.
+// Without this, dns.lookup() picks the AAAA (IPv6) record → ENETUNREACH.
+require('dns').setDefaultResultOrder('ipv4first');
+
 const { Pool } = require('pg');
 
 let pool = null;
