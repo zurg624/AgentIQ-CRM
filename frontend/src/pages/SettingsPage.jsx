@@ -220,8 +220,35 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
                 המערכת תבצע התאמה אוטומטית ותשלח התראה לסוכן הרלוונטי.
               </p>
 
-              {/* Endpoint */}
-              <Field label="Webhook URL">
+              {/* Apify endpoint (highlighted) */}
+              <Field label="🎯 Apify HTTP Integration URL" hint='הדבק URL זה ב-Apify → Actor → Integrations → HTTP → URL'>
+                <div className="flex gap-2">
+                  <input readOnly value="https://agentiq-crm.onrender.com/api/ingest/apify"
+                    className="dark-input flex-1 px-3 py-2 text-xs rounded-xl font-mono"
+                    style={{ color: '#34d399' }} />
+                  <button
+                    onClick={() => { navigator.clipboard.writeText('https://agentiq-crm.onrender.com/api/ingest/apify'); showToast('✅ Apify URL הועתק'); }}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold transition-all"
+                    style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)' }}>
+                    העתק
+                  </button>
+                </div>
+              </Field>
+
+              {/* Apify integration steps */}
+              <div className="rounded-xl p-3 text-xs space-y-1.5 text-right"
+                style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                <p className="font-semibold" style={{ color: '#34d399' }}>⚙️ הגדרת Apify — 3 שלבים:</p>
+                <p style={{ color: '#94a3b8' }}>1. Actor → Integrations → <strong style={{color:'#e2e8f0'}}>HTTP Integration</strong></p>
+                <p style={{ color: '#94a3b8' }}>2. URL: העתק את ה-URL הירוק למעלה</p>
+                <p style={{ color: '#94a3b8' }}>3. Payload format: <strong style={{color:'#e2e8f0'}}>Dataset: JSON</strong> (לא Webhook)</p>
+                <p className="pt-1 text-[10px]" style={{ color: '#475569' }}>
+                  ✓ לא נדרש API key עבור Apify · פורמט שדות גמיש (title/name, price/askingPrice, city/location…)
+                </p>
+              </div>
+
+              {/* General endpoint */}
+              <Field label="Webhook URL (כללי)" hint="לשותפים ו-scrapers — שלח x-api-key בהדר">
                 <div className="flex gap-2">
                   <input readOnly value="https://agentiq-crm.onrender.com/api/ingest/property"
                     className="dark-input flex-1 px-3 py-2 text-xs rounded-xl font-mono"
@@ -236,7 +263,7 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
               </Field>
 
               {/* API Key */}
-              <Field label="מפתח API" hint="שלח כ-header: x-api-key: [KEY]">
+              <Field label="מפתח API" hint="אפשר גם להגדיר INGEST_API_KEY כ-env var ב-Render">
                 <div className="flex gap-2">
                   <input readOnly
                     value={settings?.ingest_api_key ? '••••••••••••' + (settings.ingest_api_key.slice(-6)) : 'טוען...'}
@@ -254,25 +281,23 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
               </Field>
 
               {/* Payload example */}
-              <Field label="פורמט ה-Payload (JSON)">
+              <Field label="פורמט ה-Payload (JSON) — single property">
                 <pre className="text-[10px] p-3 rounded-xl overflow-x-auto text-left"
                   style={{ background: 'rgba(0,0,0,0.4)', color: '#7dd3fc', border: '1px solid rgba(255,255,255,0.06)', fontFamily: 'monospace', direction: 'ltr' }}>
-{`POST /api/ingest/property
-Headers: x-api-key: YOUR_KEY
-         Content-Type: application/json
-
-{
-  "title":       "דירה 4 חדרים, קרוב לים",
-  "price":       2500000,
-  "city":        "תל אביב",
-  "area":        "פלורנטין",
-  "type":        "דירה",
-  "rooms":       4,
-  "sqm":         110,
-  "url":         "https://...",
-  "source":      "Yad2",
-  "description": "תיאור הנכס..."
-}`}
+{`// Single object OR array — both accepted:
+[
+  {
+    "title":   "דירה 4 חדרים, קרוב לים",
+    "price":   2500000,
+    "city":    "תל אביב",
+    "area":    "פלורנטין",
+    "type":    "דירה",
+    "rooms":   4,
+    "sqm":     110,
+    "url":     "https://...",
+    "source":  "Yad2"
+  }
+]`}
                 </pre>
               </Field>
 

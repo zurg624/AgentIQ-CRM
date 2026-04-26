@@ -43,6 +43,7 @@ export const api = {
 
   // Lead Ingestion Engine
   ingestProperty:       (body)  => request('/ingest/property',   { method: 'POST', body: JSON.stringify(body) }),
+  ingestApify:          (body)  => request('/ingest/apify',       { method: 'POST', body: JSON.stringify(body) }),
   ingestTest:           ()      => request('/ingest/test',        { method: 'POST' }),
   getIngestedProperties:()      => request('/ingest/properties'),
   getNotifications:     ()      => request('/notifications'),

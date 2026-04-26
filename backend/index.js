@@ -11,7 +11,21 @@ try {
   process.exit(1);
 }
 
+// Supabase / PostgreSQL — active when DATABASE_URL is set
+const { ensurePgSchema, pgInsertProperty } = require('./pgClient');
+ensurePgSchema(); // verify / create table on startup
+
 const app = express();
+
+// ── Request logger (shows every hit in Render logs) ──────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} → ${res.statusCode} (${ms}ms) origin=${req.headers.origin || 'none'}`);
+  });
+  next();
+});
 
 // CORS — accept any origin listed in FRONTEND_URL (comma-separated),
 // plus localhost for development. Falls back to allow all if not set.
@@ -373,6 +387,33 @@ app.get('/api/matches', (req, res) => {
 
 // ── Lead Ingestion Engine ─────────────────────────────────────────────────────
 
+/**
+ * Normalize the body sent by various callers into a flat array of property objects.
+ *
+ * Supported shapes:
+ *   • Single object        { title, price, … }
+ *   • Array                [{ title, price, … }, …]          ← Apify default
+ *   • Wrapped array        { items: […] }  |  { data: […] }  ← some integrations
+ *   • Apify webhook event  { resource: { … }, eventType: … } ← ignored (no dataset)
+ */
+function normalizeIngestBody(body) {
+  if (Array.isArray(body))              return body;
+  if (Array.isArray(body?.items))       return body.items;
+  if (Array.isArray(body?.data))        return body.data;
+  if (Array.isArray(body?.results))     return body.results;
+  // Single plain object with at least a title or price field
+  if (body && (body.title || body.price)) return [body];
+  return [];
+}
+
+// Resolve the ingest API key: env var takes precedence over DB-stored key
+function getExpectedKey() {
+  if (process.env.INGEST_API_KEY) return process.env.INGEST_API_KEY;
+  try {
+    return db.prepare("SELECT value FROM settings WHERE key = 'ingest_api_key'").get()?.value || null;
+  } catch { return null; }
+}
+
 // Matching score for ingested properties against leads
 function calcIngestScore(lead, prop) {
   const budget = _parseBudget(lead.message);
@@ -415,29 +456,33 @@ function calcIngestScore(lead, prop) {
   return Math.min(score, 99);
 }
 
-// POST /api/ingest/property — gateway for Apify, Meta Ads, manual push
-app.post('/api/ingest/property', (req, res) => {
-  // Optional API key check
-  const keyRow = db.prepare("SELECT value FROM settings WHERE key = 'ingest_api_key'").get();
-  const expectedKey = keyRow?.value;
-  const sentKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
-  if (expectedKey && sentKey && sentKey !== expectedKey) {
-    return res.status(401).json({ error: 'Invalid API key' });
-  }
+/**
+ * Core ingest logic — shared by /api/ingest/property and /api/ingest/apify.
+ * Writes to SQLite (matching engine) AND Supabase (persistence).
+ * Returns { property, matches }.
+ */
+async function ingestOneProperty(item) {
+  const { title, price, city, area, type, rooms, sqm, url, source = 'API', description } = item;
 
-  const { title, price, city, area, type, rooms, sqm, url, source = 'API', description } = req.body;
-  if (!title || !price) return res.status(400).json({ error: 'title and price are required' });
-
-  // Store property
+  // ── 1. SQLite (local matching engine) ──────────────────────────
   const ins = db.prepare(`
     INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, Number(price), city||null, area||null, type||null, rooms||null, sqm||null, url||null, source, description||null);
+  `).run(title, Number(price), city||null, area||null, type||null,
+         rooms||null, sqm||null, url||null, source, description||null);
 
   const propId = ins.lastInsertRowid;
   const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propId);
 
-  // Scan active leads for matches
+  // ── 2. Supabase / PostgreSQL (persistent cloud storage) ────────
+  const pgRow = await pgInsertProperty({ title, price, city, area, type, rooms, sqm, url, source, description });
+  if (pgRow) {
+    console.log(`[ingest] Supabase ✓ id=${pgRow.id} "${title}"`);
+  } else {
+    console.warn(`[ingest] Supabase write skipped/failed for "${title}"`);
+  }
+
+  // ── 3. Match against active leads ──────────────────────────────
   const leads = db.prepare("SELECT * FROM leads WHERE status != 'Closed'").all();
   const matches = [];
 
@@ -463,7 +508,137 @@ app.post('/api/ingest/property', (req, res) => {
     }
   }
 
-  res.status(201).json({ property, matches_found: matches.length, matches });
+  return { property, matches };
+}
+
+// POST /api/ingest/property — single or array, any integration
+app.post('/api/ingest/property', async (req, res) => {
+  console.log('[ingest/property] body preview:', JSON.stringify(req.body).slice(0, 300));
+
+  // API key check (env var beats DB-stored key; missing key = open access)
+  const expectedKey = getExpectedKey();
+  const sentKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (expectedKey && sentKey && sentKey !== expectedKey) {
+    console.warn('[ingest/property] rejected — API key mismatch');
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+
+  const items = normalizeIngestBody(req.body);
+  console.log(`[ingest/property] normalized to ${items.length} item(s)`);
+
+  if (items.length === 0) {
+    return res.status(400).json({
+      error: 'No valid property data found.',
+      hint: 'Send { title, price, ... } or an array of such objects.',
+      received: JSON.stringify(req.body).slice(0, 200),
+    });
+  }
+
+  const results = [];
+  for (const item of items) {
+    if (!item.title || !item.price) {
+      console.warn('[ingest/property] skipping item — missing title or price:', JSON.stringify(item).slice(0, 100));
+      results.push({ skipped: true, reason: 'missing title or price', item });
+      continue;
+    }
+    try {
+      const r = await ingestOneProperty(item);
+      results.push(r);
+      console.log(`[ingest/property] ✓ "${item.title}" — ${r.matches.length} match(es)`);
+    } catch (err) {
+      console.error('[ingest/property] error:', err.message);
+      results.push({ error: err.message, item });
+    }
+  }
+
+  const ok = results.filter(r => r.property);
+  res.status(201).json({
+    processed: ok.length,
+    total_matches: ok.reduce((s, r) => s + (r.matches?.length || 0), 0),
+    results,
+  });
+});
+
+/**
+ * POST /api/ingest/apify — dedicated endpoint for Apify HTTP Integration.
+ *
+ * Apify can send its dataset in several ways depending on how you configure
+ * the HTTP Integration. All common shapes are handled:
+ *
+ *   1. Apify HTTP Integration "Send dataset as JSON body" → array at root
+ *   2. Apify Webhook payload               → { resource, eventType, … }
+ *      (we ignore these — no dataset in the webhook body itself)
+ *   3. Custom actor output                 → any nested shape
+ *
+ * No API key required on this endpoint — secure it via Render's network if needed.
+ */
+app.post('/api/ingest/apify', async (req, res) => {
+  console.log('[ingest/apify] received, keys:', Object.keys(req.body || {}).join(', '));
+  console.log('[ingest/apify] body preview:', JSON.stringify(req.body).slice(0, 400));
+
+  // Apify webhook event (no data payload, just a trigger)
+  if (req.body?.eventType) {
+    const status = req.body.resource?.status;
+    console.log(`[ingest/apify] Apify webhook event: ${req.body.eventType}, run status: ${status}`);
+    // Acknowledge immediately — we can't pull dataset from webhook body
+    return res.json({
+      received: true,
+      note: 'Apify webhook event acknowledged. To send property data, use "Send dataset as JSON body" in the HTTP Integration settings.',
+    });
+  }
+
+  const items = normalizeIngestBody(req.body);
+  console.log(`[ingest/apify] ${items.length} item(s) after normalization`);
+
+  if (items.length === 0) {
+    return res.status(400).json({
+      error: 'No property items found in payload.',
+      hint: 'In Apify → HTTP Integration, set "Payload format" to "Dataset: JSON" so the full dataset array is sent in the request body.',
+      received_keys: Object.keys(req.body || {}),
+    });
+  }
+
+  const results = [];
+  for (const item of items) {
+    // Apify actors may use different field names — normalise common variants
+    const normalised = {
+      title:       item.title       || item.name        || item.headline   || item.propertyTitle || '',
+      price:       item.price       || item.askingPrice  || item.cost       || item.priceILS      || 0,
+      city:        item.city        || item.location     || item.cityName   || null,
+      area:        item.area        || item.neighborhood || item.district   || null,
+      type:        item.type        || item.propertyType || item.category   || null,
+      rooms:       item.rooms       || item.roomCount    || item.bedrooms   || null,
+      sqm:         item.sqm         || item.squareMeters || item.size       || null,
+      url:         item.url         || item.link         || item.detailUrl  || null,
+      source:      item.source      || item.platform     || 'Apify',
+      description: item.description || item.details      || item.text       || null,
+    };
+
+    if (!normalised.title || !normalised.price) {
+      console.warn('[ingest/apify] skipping — missing title/price after normalisation:', JSON.stringify(item).slice(0,150));
+      results.push({ skipped: true, reason: 'missing title or price', raw_item: item });
+      continue;
+    }
+
+    try {
+      const r = await ingestOneProperty(normalised);
+      results.push(r);
+      console.log(`[ingest/apify] ✓ "${normalised.title}" price=${normalised.price} matches=${r.matches.length}`);
+    } catch (err) {
+      console.error('[ingest/apify] error:', err.message);
+      results.push({ error: err.message, item: normalised });
+    }
+  }
+
+  const ok = results.filter(r => r.property);
+  console.log(`[ingest/apify] done — ${ok.length}/${items.length} saved, ${ok.reduce((s,r)=>s+(r.matches?.length||0),0)} match notifications`);
+
+  res.status(201).json({
+    processed: ok.length,
+    skipped:   results.filter(r => r.skipped).length,
+    total_matches: ok.reduce((s, r) => s + (r.matches?.length || 0), 0),
+    results,
+  });
 });
 
 // GET /api/ingest/properties — list of recently ingested properties
@@ -496,42 +671,20 @@ app.post('/api/notifications/read-all', (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/ingest/test — sends a test property through the engine
-app.post('/api/ingest/test', (req, res) => {
-  req.body = {
-    title: `נכס בדיקה — דירה 4 חד' רמת גן`,
+// POST /api/ingest/test — sends a test property through the full engine (SQLite + Supabase)
+app.post('/api/ingest/test', async (req, res) => {
+  const testItem = {
+    title: `נכס בדיקה — דירה 4 חד' רמת גן ${new Date().toLocaleTimeString('he-IL')}`,
     price: 2_400_000, city: 'רמת גן', area: 'בורסה',
     type: 'דירה', rooms: 4, sqm: 105,
     source: 'Test', description: 'פינוי בינוי, חניה, מרפסת',
   };
-  // Forward through the real handler by re-calling the logic inline
-  const { title, price, city, area, type, rooms, sqm, url, source, description } = req.body;
-  const ins = db.prepare(`
-    INSERT INTO properties (title, price, city, area, type, rooms, sqm, url, source, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, price, city, area, type, rooms, sqm, null, source, description);
-  const propId = ins.lastInsertRowid;
-  const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propId);
-  const leads = db.prepare("SELECT * FROM leads WHERE status != 'Closed'").all();
-  const matches = [];
-  for (const lead of leads) {
-    const score = calcIngestScore(lead, property);
-    if (score >= 80) {
-      const msg = `🏠 התאמה חדשה: "${title}" — ${score}% עבור ${lead.name}`;
-      const notifIns = db.prepare(`
-        INSERT INTO notifications (lead_id, property_id, score, message, owner_username)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(lead.id, propId, score, msg, lead.owner_username || 'admin');
-      const notif = db.prepare(`
-        SELECT n.*, l.name as lead_name, p.title as prop_title, p.city as prop_city
-        FROM notifications n JOIN leads l ON n.lead_id = l.id JOIN properties p ON n.property_id = p.id
-        WHERE n.id = ?
-      `).get(notifIns.lastInsertRowid);
-      matches.push(notif);
-      broadcast('new-match', notif);
-    }
+  try {
+    const r = await ingestOneProperty(testItem);
+    res.json({ property: r.property, matches_found: r.matches.length, matches: r.matches });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json({ property, matches_found: matches.length, matches });
 });
 
 // ── Smart Neighbor — AI neighborhood report ───────────────────────────────────
@@ -719,9 +872,32 @@ app.get('/api/reports', (req, res) => {
   res.json({ total: leads.length, byStatus, bySource, closedCount, estimatedRevenue, monthly, agentLeaderboard });
 });
 
-// ── Health check (Render pings this to verify the service is up) ─────────────
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'AgentIQ CRM API' }));
-app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+app.get('/health', async (req, res) => {
+  const { pool } = require('./pgClient');
+  let pgStatus = 'not configured';
+  if (pool) {
+    try {
+      await pool.query('SELECT 1');
+      pgStatus = 'connected';
+    } catch (e) {
+      pgStatus = `error: ${e.message}`;
+    }
+  }
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    sqlite: 'ok',
+    supabase: pgStatus,
+    ingest_key_set: !!(process.env.INGEST_API_KEY || db.prepare("SELECT value FROM settings WHERE key='ingest_api_key'").get()?.value),
+    endpoints: {
+      ingest_single:  'POST /api/ingest/property',
+      ingest_apify:   'POST /api/ingest/apify',
+      ingest_test:    'POST /api/ingest/test',
+    },
+  });
+});
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () =>

@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.91.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.6",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "pg": "^8.13.3"
   }
 }
