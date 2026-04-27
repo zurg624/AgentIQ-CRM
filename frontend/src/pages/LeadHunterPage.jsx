@@ -134,7 +134,7 @@ function EditModal({ property, onSave, onClose }) {
 
 // ── Properties Table ──────────────────────────────────────────────────────────
 
-function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, loading }) {
+function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, onWhatsapp, onConvertCRM, isAdmin, loading, convertingId }) {
   if (loading) {
     return (
       <div className="card rounded-2xl p-10 flex flex-col items-center gap-3">
@@ -159,7 +159,7 @@ function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, loadi
         <table className="w-full text-xs">
           <thead>
             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.03)' }}>
-              {['כותרת','מחיר','עיר','סוג','חד\'','מקור','סוכן','פעולות'].map(h => (
+              {['כותרת','תקציר','מחיר','עיר','חד\'','מקור', ...(isAdmin ? ['סוכן'] : []), 'פעולות'].map(h => (
                 <th key={h} className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"
                   style={{ color: '#64748b' }}>{h}</th>
               ))}
@@ -177,8 +177,15 @@ function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, loadi
                 onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)'}>
 
                 {/* Title */}
-                <td className="px-3 py-2.5 text-right max-w-[180px]">
-                  <span className="font-medium text-white" title={p.title}>{truncate(p.title, 45)}</span>
+                <td className="px-3 py-2.5 text-right max-w-[200px]">
+                  <span className="font-medium text-white" title={p.title}>{truncate(p.title, 50)}</span>
+                </td>
+
+                {/* Description preview */}
+                <td className="px-3 py-2.5 text-right max-w-[260px]">
+                  <span style={{ color: '#64748b', fontSize: 11, lineHeight: 1.45 }} title={p.description}>
+                    {truncate(p.description, 90)}
+                  </span>
                 </td>
 
                 {/* Price */}
@@ -191,16 +198,6 @@ function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, loadi
                 {/* City */}
                 <td className="px-3 py-2.5 text-right">
                   <span style={{ color: '#94a3b8' }}>{p.city || '—'}</span>
-                </td>
-
-                {/* Type */}
-                <td className="px-3 py-2.5 text-right">
-                  {p.type ? (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                      style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}>
-                      {p.type}
-                    </span>
-                  ) : <span style={{ color: '#334155' }}>—</span>}
                 </td>
 
                 {/* Rooms */}
@@ -216,46 +213,61 @@ function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, loadi
                   </span>
                 </td>
 
-                {/* Agent dropdown */}
-                <td className="px-3 py-2.5 text-right">
-                  <select
-                    value={p.assigned_to || ''}
-                    onChange={e => onAssign(p.id, e.target.value || null)}
-                    className="text-[11px] rounded-lg px-2 py-1 text-right"
-                    style={{
-                      background: 'rgba(255,255,255,0.05)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      color: p.assigned_to ? '#a5b4fc' : '#475569',
-                      minWidth: 80,
-                    }}>
-                    <option value="">— שייך —</option>
-                    {agents.map(a => (
-                      <option key={a.id} value={a.name}>{a.name}</option>
-                    ))}
-                  </select>
-                </td>
+                {/* Agent dropdown — admin only */}
+                {isAdmin && (
+                  <td className="px-3 py-2.5 text-right">
+                    <select
+                      value={p.assigned_to || ''}
+                      onChange={e => onAssign(p.id, e.target.value || null)}
+                      className="text-[11px] rounded-lg px-2 py-1 text-right"
+                      style={{
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        color: p.assigned_to ? '#a5b4fc' : '#475569',
+                        minWidth: 80,
+                      }}>
+                      <option value="">— שייך —</option>
+                      {agents.map(a => (
+                        <option key={a.id} value={a.name}>{a.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                )}
 
                 {/* Actions */}
                 <td className="px-3 py-2.5 text-right whitespace-nowrap">
                   <div className="flex items-center justify-end gap-1.5">
+                    {/* Convert to CRM lead */}
+                    <button onClick={() => onConvertCRM(p)} title="המר לליד CRM"
+                      disabled={convertingId === p.id}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all disabled:opacity-50"
+                      style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
+                      {convertingId === p.id ? <span className="w-3 h-3 border border-indigo-400/40 border-t-indigo-300 rounded-full animate-spin" /> : '➕'}
+                    </button>
+                    {/* WhatsApp */}
+                    <button onClick={() => onWhatsapp(p)} title="שלח בוואטסאפ"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
+                      style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80' }}>
+                      💬
+                    </button>
                     {/* Facebook / source link */}
                     {p.url && (
                       <a href={p.url} target="_blank" rel="noopener noreferrer"
                         title="פתח פוסט מקורי"
-                        className="w-6 h-6 rounded-lg flex items-center justify-center text-sm transition-all"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
                         style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>
                         🔗
                       </a>
                     )}
                     {/* Edit */}
                     <button onClick={() => onEdit(p)} title="עריכה"
-                      className="w-6 h-6 rounded-lg flex items-center justify-center text-sm transition-all"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
                       style={{ background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }}>
                       ✏️
                     </button>
                     {/* Delete */}
                     <button onClick={() => onDelete(p.id)} title="מחיקה"
-                      className="w-6 h-6 rounded-lg flex items-center justify-center text-sm transition-all"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
                       style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171' }}>
                       🗑️
                     </button>
@@ -333,7 +345,8 @@ function ProfileRow({ profile }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function LeadHunterPage({ agents = [] }) {
+export default function LeadHunterPage({ agents = [], user = null }) {
+  const isAdmin = user?.role === 'admin';
   const [tab, setTab]             = useState('facebook');
 
   // Facebook tab state
@@ -344,6 +357,7 @@ export default function LeadHunterPage({ agents = [] }) {
   const [scanUrl,     setScanUrl]     = useState('');   // optional FB group URL
   const [editTarget,  setEditTarget]  = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [convertingId,  setConvertingId]  = useState(null);
   const [toast,       setToast]       = useState('');
 
   // Match tab state
@@ -432,6 +446,45 @@ export default function LeadHunterPage({ agents = [] }) {
   const handleAssign = async (id, agentName) => {
     await api.assignPropertyAgent(id, agentName || null);
     setProperties(prev => prev.map(p => p.id === id ? { ...p, assigned_to: agentName || null } : p));
+  };
+
+  // Build a human-readable summary of a property (for WhatsApp + CRM message)
+  const propertySummary = (p) => {
+    const parts = [];
+    if (p.title) parts.push(`🏠 ${p.title}`);
+    if (p.price > 0) parts.push(`💰 ${fmtPrice(p.price)}`);
+    if (p.city)  parts.push(`📍 ${p.city}${p.area ? ' / ' + p.area : ''}`);
+    if (p.rooms) parts.push(`🚪 ${p.rooms} חדרים`);
+    if (p.sqm)   parts.push(`📐 ${p.sqm} מ"ר`);
+    if (p.description) parts.push(`\n${p.description.slice(0, 350)}`);
+    if (p.url)   parts.push(`\n🔗 ${p.url}`);
+    return parts.join('\n');
+  };
+
+  // WhatsApp share — picker (no number) so user picks the recipient inside WA
+  const handleWhatsapp = (p) => {
+    const text = encodeURIComponent(propertySummary(p));
+    window.open(`https://wa.me/?text=${text}`, '_blank');
+  };
+
+  // Convert a scraped property into a real CRM lead
+  const handleConvertCRM = async (p) => {
+    if (convertingId) return;
+    setConvertingId(p.id);
+    try {
+      const lead = await api.createLead({
+        name:    p.title?.slice(0, 80) || `נכס מ-Apify ${p.id}`,
+        phone:   null,
+        source:  `Facebook · ${p.source || 'Apify'}`,
+        message: propertySummary(p),
+        owner_username: user?.username || null,
+      });
+      showToast(`✅ הליד "${lead.name}" נוסף ל-CRM`);
+    } catch (err) {
+      showToast(`❌ שגיאה בהמרה: ${err.message}`, 4000);
+    } finally {
+      setConvertingId(null);
+    }
   };
 
   // Send match via WhatsApp
@@ -568,9 +621,13 @@ export default function LeadHunterPage({ agents = [] }) {
             properties={properties}
             agents={agents}
             loading={propLoading}
+            isAdmin={isAdmin}
+            convertingId={convertingId}
             onEdit={setEditTarget}
             onDelete={handleDelete}
             onAssign={handleAssign}
+            onWhatsapp={handleWhatsapp}
+            onConvertCRM={handleConvertCRM}
           />
         </div>
       )}

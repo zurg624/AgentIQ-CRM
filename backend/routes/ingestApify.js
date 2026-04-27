@@ -42,6 +42,8 @@ const HEBREW_CITIES = [
 /**
  * Extract price in ILS from free-text Hebrew post.
  * Handles: "1.9 מיליון" | "₪1,900,000" | "850 אלף" | "2.5M"
+ * Aggressive fallback: any standalone 6-9 digit number in the realistic
+ * Israeli real-estate range (100K – 100M ILS) is treated as a price.
  */
 function extractPriceFromText(text) {
   if (!text) return null;
@@ -70,6 +72,24 @@ function extractPriceFromText(text) {
       .filter(n => n >= 100_000)
       .sort((a, b) => b - a)[0];
     if (largest) return largest;
+  }
+
+  // ── AGGRESSIVE FALLBACK ─────────────────────────────────────────────────
+  // Any standalone 6-9 digit number that falls in a realistic real-estate
+  // price range (100,000 – 100,000,000 ILS).  Avoids 10-digit numbers
+  // (likely phone numbers) and very small numbers (likely sqm/rooms).
+  // Strip phone-like patterns first to reduce false positives.
+  const cleaned = s
+    .replace(/\b0\d[-\s]?\d{3,4}[-\s]?\d{3,4}\b/g, ' ')   // 050-1234567, 02 1234567
+    .replace(/\b\+972[-\s]?\d[-\s]?\d{3,4}[-\s]?\d{3,4}\b/g, ' '); // +972-50-1234567
+
+  const standalone = cleaned.match(/\b\d{6,9}\b/g);
+  if (standalone) {
+    const candidates = standalone
+      .map(n => parseInt(n, 10))
+      .filter(n => n >= 100_000 && n <= 100_000_000)
+      .sort((a, b) => b - a);
+    if (candidates.length) return candidates[0];
   }
 
   return null;
@@ -105,8 +125,26 @@ function parsePrice(raw) {
 }
 
 function mapItem(raw) {
+  // Pull out the post body — different Apify Facebook actors use different
+  // field names, so check every common one.
   const postText =
-    raw.postText ?? raw.text ?? raw.description ?? raw.body ?? raw.content ?? null;
+    raw.postText    ??
+    raw.text        ??
+    raw.message     ??
+    raw.description ??
+    raw.body        ??
+    raw.content     ??
+    raw.post        ??
+    raw.caption     ??
+    raw.full_text   ??
+    raw.fullText    ??
+    raw.html        ??   // last resort — HTML body, will be cleaned for the title
+    null;
+
+  // Strip HTML tags & collapse whitespace for the title preview
+  const cleanText = postText
+    ? String(postText).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    : null;
 
   const title =
     raw.title         ??
@@ -114,20 +152,20 @@ function mapItem(raw) {
     raw.headline      ??
     raw.propertyTitle ??
     raw.header        ??
-    (postText ? String(postText).slice(0, 200).replace(/\n/g, ' ') : null) ??
+    (cleanText ? cleanText.slice(0, 140) : null) ??
     'נכס מ-Apify';
 
-  // Price: structured fields → text extraction → default 0
+  // Price: structured fields → text extraction (aggressive) → default 0
   let price = parsePrice(
     raw.price ?? raw.priceValue ?? raw.priceILS ?? raw.askingPrice ?? raw.cost ?? raw.salePrice ?? null
   );
   if (!price || price === 0) {
-    price = extractPriceFromText(postText) ?? 0;
+    price = extractPriceFromText(cleanText) ?? extractPriceFromText(title) ?? 0;
   }
 
-  // City: structured fields → text extraction
+  // City: structured fields → text extraction (search both body and title)
   let city = raw.city ?? raw.cityName ?? raw.location ?? raw.region ?? null;
-  if (!city) city = extractCityFromText(postText);
+  if (!city) city = extractCityFromText(cleanText) ?? extractCityFromText(title);
 
   const area =
     raw.area         ??
@@ -173,7 +211,8 @@ function mapItem(raw) {
     raw.site     ??
     'Apify';
 
-  const description = postText ?? raw.details ?? null;
+  // Use the cleaned post body for description so it's UI-ready and human-readable
+  const description = cleanText ?? raw.details ?? null;
 
   return { title, price, city, area, type, rooms, sqm, url, source, description };
 }

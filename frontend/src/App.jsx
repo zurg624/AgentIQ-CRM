@@ -206,7 +206,7 @@ function AppInner() {
           )}
           {page === 'shachen'   && <ShachenPage />}
           {page === 'dealcalc'  && <ToolsPage settings={settings} />}
-          {page === 'hunter'    && <LeadHunterPage agents={agents} />}
+          {page === 'hunter'    && <LeadHunterPage agents={agents} user={user} />}
           {page === 'marketing' && <MarketingAIPage />}
           {page === 'packages'  && <PackagesPage />}
           {page === 'reports'   && <ReportsPage systemName={systemName} />}
