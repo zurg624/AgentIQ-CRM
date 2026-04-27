@@ -134,8 +134,20 @@ const LEAD_SELECT = `
   ORDER BY l.created_at DESC
 `;
 
+// Parse the custom_fields JSON column into an object for the API consumer.
+// Run every lead row through this before returning it.
+function hydrateLead(row) {
+  if (!row) return row;
+  try {
+    row.custom_fields = row.custom_fields ? JSON.parse(row.custom_fields) : {};
+  } catch {
+    row.custom_fields = {};
+  }
+  return row;
+}
+
 app.get('/api/leads', (req, res) => {
-  res.json(db.prepare(LEAD_SELECT).all());
+  res.json(db.prepare(LEAD_SELECT).all().map(hydrateLead));
 });
 
 app.get('/api/leads/:id', (req, res) => {
@@ -143,25 +155,26 @@ app.get('/api/leads/:id', (req, res) => {
     'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
   ).get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  res.json(lead);
+  res.json(hydrateLead(lead));
 });
 
 // Create lead — analyze with Claude, broadcast SSE toast
 app.post('/api/new-lead', async (req, res) => {
-  const { name, phone, source = 'Manual', message = '', agent_id = null } = req.body;
+  const { name, phone, source = 'Manual', message = '', agent_id = null, custom_fields = null } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   const { owner_username = null } = req.body;
+  const customJson = custom_fields ? (typeof custom_fields === 'string' ? custom_fields : JSON.stringify(custom_fields)) : '{}';
   const result = db.prepare(
-    'INSERT INTO leads (name, phone, source, message, agent_id, owner_username) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(name, phone ?? null, source, message, agent_id, owner_username);
+    'INSERT INTO leads (name, phone, source, message, agent_id, owner_username, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, phone ?? null, source, message, agent_id, owner_username, customJson);
 
   const leadId = result.lastInsertRowid;
 
   // Respond immediately so the UI isn't blocked
-  let lead = db.prepare(
+  let lead = hydrateLead(db.prepare(
     'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-  ).get(leadId);
+  ).get(leadId));
   res.status(201).json(lead);
 
   // Analyze in background, then update DB + broadcast
@@ -169,9 +182,9 @@ app.post('/api/new-lead', async (req, res) => {
   if (analysis) {
     const summary = `${analysis.ai_summary}${analysis.next_step ? '\n\n⚡ ' + analysis.next_step : ''}`;
     db.prepare('UPDATE leads SET ai_summary = ? WHERE id = ?').run(summary, leadId);
-    lead = db.prepare(
+    lead = hydrateLead(db.prepare(
       'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-    ).get(leadId);
+    ).get(leadId));
   }
 
   broadcast('new-lead', lead);
@@ -190,9 +203,9 @@ app.post('/api/webhook/whatsapp', async (req, res) => {
   ).run(name, phone, 'WhatsApp', Body ?? '');
 
   const leadId = result.lastInsertRowid;
-  let lead = db.prepare(
+  let lead = hydrateLead(db.prepare(
     'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-  ).get(leadId);
+  ).get(leadId));
 
   res.status(201).json(lead);
 
@@ -200,9 +213,9 @@ app.post('/api/webhook/whatsapp', async (req, res) => {
   if (analysis) {
     const summary = `${analysis.ai_summary}${analysis.next_step ? '\n\n⚡ ' + analysis.next_step : ''}`;
     db.prepare('UPDATE leads SET ai_summary = ? WHERE id = ?').run(summary, leadId);
-    lead = db.prepare(
+    lead = hydrateLead(db.prepare(
       'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-    ).get(leadId);
+    ).get(leadId));
   }
 
   broadcast('new-lead', lead);
@@ -211,9 +224,9 @@ app.post('/api/webhook/whatsapp', async (req, res) => {
 app.patch('/api/leads/:id/agent', (req, res) => {
   const { agent_id } = req.body;
   db.prepare('UPDATE leads SET agent_id = ? WHERE id = ?').run(agent_id, req.params.id);
-  const lead = db.prepare(
+  const lead = hydrateLead(db.prepare(
     'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-  ).get(req.params.id);
+  ).get(req.params.id));
   if (!lead) return res.status(404).json({ error: 'Not found' });
   res.json(lead);
 });
@@ -231,9 +244,15 @@ app.patch('/api/leads/:id/ai-summary', (req, res) => {
 });
 
 app.put('/api/leads/:id', (req, res) => {
-  const { name, phone, source, message, notes, last_contacted } = req.body;
+  const { name, phone, source, message, notes, last_contacted, custom_fields } = req.body;
   const lead = db.prepare('SELECT id FROM leads WHERE id = ?').get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
+
+  // Accept custom_fields as either an object or a JSON string
+  const customJson = custom_fields !== undefined && custom_fields !== null
+    ? (typeof custom_fields === 'string' ? custom_fields : JSON.stringify(custom_fields))
+    : null;
+
   db.prepare(`
     UPDATE leads SET
       name = COALESCE(?, name),
@@ -241,12 +260,18 @@ app.put('/api/leads/:id', (req, res) => {
       source = COALESCE(?, source),
       message = COALESCE(?, message),
       notes = COALESCE(?, notes),
-      last_contacted = COALESCE(?, last_contacted)
+      last_contacted = COALESCE(?, last_contacted),
+      custom_fields = COALESCE(?, custom_fields)
     WHERE id = ?
-  `).run(name ?? null, phone ?? null, source ?? null, message ?? null, notes ?? null, last_contacted ?? null, req.params.id);
-  const updated = db.prepare(
+  `).run(
+    name ?? null, phone ?? null, source ?? null, message ?? null,
+    notes ?? null, last_contacted ?? null, customJson,
+    req.params.id
+  );
+
+  const updated = hydrateLead(db.prepare(
     'SELECT l.*, a.name as agent_name FROM leads l LEFT JOIN agents a ON l.agent_id = a.id WHERE l.id = ?'
-  ).get(req.params.id);
+  ).get(req.params.id));
   res.json(updated);
 });
 
@@ -876,6 +901,214 @@ app.get('/api/reports', (req, res) => {
   `).all();
 
   res.json({ total: leads.length, byStatus, bySource, closedCount, estimatedRevenue, monthly, agentLeaderboard });
+});
+
+// ── Custom Fields ────────────────────────────────────────────────────────────
+//
+// Two-table model:
+//   custom_field_definitions  — admin-managed list of "what fields exist"
+//   leads.custom_fields       — JSON column with per-lead values
+//
+// Read endpoints are open to all authenticated users (agents need to render
+// the form). Write endpoints (create / update / delete) are admin-only.
+const FIELD_TYPES = ['text', 'number', 'date', 'select', 'phone', 'url', 'textarea'];
+
+// Hydrate a definition row for the API consumer (parse options JSON)
+function hydrateFieldDef(row) {
+  if (!row) return row;
+  let opts = [];
+  if (row.options) {
+    try { opts = JSON.parse(row.options); } catch { opts = []; }
+  }
+  return { ...row, options: opts, required: !!row.required };
+}
+
+app.get('/api/custom-fields', (req, res) => {
+  const rows = db.prepare(
+    'SELECT * FROM custom_field_definitions ORDER BY position ASC, id ASC'
+  ).all();
+  res.json(rows.map(hydrateFieldDef));
+});
+
+app.post('/api/custom-fields', requireAdmin, (req, res) => {
+  const { field_key, label, field_type, options, required, position } = req.body;
+
+  if (!field_key || !label || !field_type) {
+    return res.status(400).json({ error: 'field_key, label, and field_type are required' });
+  }
+  if (!FIELD_TYPES.includes(field_type)) {
+    return res.status(400).json({ error: `field_type must be one of: ${FIELD_TYPES.join(', ')}` });
+  }
+  // field_key is used as a JSON object key in leads.custom_fields — keep it
+  // safe for cross-language interop and URL paths.
+  if (!/^[a-z][a-z0-9_]{0,40}$/.test(field_key)) {
+    return res.status(400).json({
+      error: 'field_key must start with a lowercase letter and contain only a-z, 0-9, and _',
+    });
+  }
+  if (field_type === 'select' && (!Array.isArray(options) || options.length === 0)) {
+    return res.status(400).json({ error: 'select fields require a non-empty options array' });
+  }
+
+  try {
+    const r = db.prepare(`
+      INSERT INTO custom_field_definitions (field_key, label, field_type, options, required, position)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      field_key,
+      label,
+      field_type,
+      Array.isArray(options) && options.length ? JSON.stringify(options) : null,
+      required ? 1 : 0,
+      Number.isInteger(position) ? position : 0,
+    );
+    const row = db.prepare('SELECT * FROM custom_field_definitions WHERE id = ?').get(r.lastInsertRowid);
+    res.status(201).json(hydrateFieldDef(row));
+  } catch (err) {
+    if (err.message?.includes('UNIQUE')) {
+      return res.status(409).json({ error: `field_key "${field_key}" already exists` });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/custom-fields/:id', requireAdmin, (req, res) => {
+  const { label, field_type, options, required, position } = req.body;
+  const existing = db.prepare('SELECT id FROM custom_field_definitions WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+
+  if (field_type !== undefined && !FIELD_TYPES.includes(field_type)) {
+    return res.status(400).json({ error: `field_type must be one of: ${FIELD_TYPES.join(', ')}` });
+  }
+
+  db.prepare(`
+    UPDATE custom_field_definitions SET
+      label      = COALESCE(?, label),
+      field_type = COALESCE(?, field_type),
+      options    = COALESCE(?, options),
+      required   = COALESCE(?, required),
+      position   = COALESCE(?, position)
+    WHERE id = ?
+  `).run(
+    label ?? null,
+    field_type ?? null,
+    Array.isArray(options) ? JSON.stringify(options) : null,
+    required === undefined ? null : (required ? 1 : 0),
+    Number.isInteger(position) ? position : null,
+    req.params.id,
+  );
+
+  const row = db.prepare('SELECT * FROM custom_field_definitions WHERE id = ?').get(req.params.id);
+  res.json(hydrateFieldDef(row));
+});
+
+app.delete('/api/custom-fields/:id', requireAdmin, (req, res) => {
+  // Note: leads keep their stored values in custom_fields JSON even after the
+  // definition is removed. They're harmless extra keys — just won't render.
+  // If you want a hard purge, add a vacuum job that strips orphaned keys.
+  const r = db.prepare('DELETE FROM custom_field_definitions WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ ok: true, deleted: parseInt(req.params.id) });
+});
+
+// ── Marketing AI — generate 3 platform-tuned variations in one Claude call ──
+//
+// POST /api/marketing/generate
+// Body:    { type, rooms, area, price, feature?, sqm?, floor? }
+// Returns: { story, group, marketplace }
+app.post('/api/marketing/generate', async (req, res) => {
+  const { type = 'דירה', rooms, area, price, feature, sqm, floor } = req.body;
+
+  if (!area || !price) {
+    return res.status(400).json({ error: 'area and price are required' });
+  }
+
+  const priceFmt = `₪${Number(price).toLocaleString('he-IL')}`;
+  const meta = [
+    type,
+    rooms ? `${rooms} חדרים` : null,
+    sqm   ? `${sqm} מ"ר`     : null,
+    floor ? `קומה ${floor}` : null,
+    feature || null,
+  ].filter(Boolean).join(' · ');
+
+  // Mock fallback when no Claude key is configured
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.json({
+      story:       `🔥🏠 ${type} ${rooms || ''} חד' ב${area}!\n💰 ${priceFmt}\n→ DM עכשיו`,
+      group:       `שלום חברים 🙋\nהזדמנות חמה ב${area} — ${type} ${rooms || ''} חדרים, ${priceFmt}.\n${feature ? '✨ ' + feature : ''}\nמי שמתעניין — שלחו לי פרטית!`,
+      marketplace: `${type} ב${area}\n💵 ${priceFmt}\n${rooms ? `🚪 ${rooms} חדרים` : ''}\n${sqm ? `📐 ${sqm} מ"ר` : ''}\n${feature ? `✅ ${feature}` : ''}\n📞 לתיאום צפייה: השאירו תגובה`,
+    });
+  }
+
+  const userBrief = `נכס: ${type} ב${area}
+מחיר: ${priceFmt}
+${rooms ? `חדרים: ${rooms}\n` : ''}${sqm ? `שטח: ${sqm} מ"ר\n` : ''}${floor ? `קומה: ${floor}\n` : ''}${feature ? `תכונה מיוחדת: ${feature}\n` : ''}
+אנא צור 3 וריאציות שיווקיות. החזר JSON בלבד.`;
+
+  const SYSTEM = `אתה כותב פוסטים שיווקיים לסוכני נדל"ן בישראל ב-3 פורמטים שונים. תמיד החזר JSON תקין ובלבד — בלי markdown, בלי טקסט מסביב.
+
+הפורמט המדויק להחזרה:
+{"story": "<טקסט>", "group": "<טקסט>", "marketplace": "<טקסט>"}
+
+כללים מחייבים לכל וריאציה:
+
+1. story — לסטורי באינסטגרם / סטטוס בוואטסאפ:
+   • 1-3 שורות בלבד, מהיר ומיידי
+   • פותח עם 3-5 אימוג'י חזקים
+   • כותרת hook קצרה + CTA חד ("שלחו DM" / "הקישור בביו")
+   • מקסימום 90 תווים סה"כ
+
+2. group — לקבוצות פייסבוק (כמו "נדל"ן בתל אביב"):
+   • 100-150 מילים, טון אישי וחברותי
+   • פותח עם hook רגשי או שאלה ("מי מחפש כבר חודשים בית בקיסריה?")
+   • 3-4 אימוג'י נקודתיים בלבד, לא מוגזם
+   • מציג את הנכס + יתרון מיוחד 1-2
+   • סוגר בשאלה שמעודדת תגובות + הצעה לפנייה אישית
+   • סגנון: "חבר שמספר על הזדמנות" — לא דוכן מכירות
+
+3. marketplace — ל-Marketplace של פייסבוק / יד2:
+   • מובנה ויבש, ✅ נקודות בולטות
+   • מינימום אימוג'י (רק לפני נקודה מרכזית כמו 💵 או 📞)
+   • שורת מחיר ברורה ובולטת בהתחלה
+   • 4-6 בולטים: חניה / מרפסת / נוף / מצב / חידוש / קרוב למה
+   • סוגר ב-CTA לתיאום צפייה
+   • מקסימום 80 מילים
+
+חוקים חוצי-וריאציות:
+- עברית מקצועית. אסור עברית-אנגלית מעורבת
+- אסור להמציא נתונים שלא נתונים (אם לא נאמר "נוף לים" — אל תכתוב נוף לים)
+- אם תכונה מיוחדת ניתנה — היא חייבת להיות מודגשת בכל שלוש הוריאציות
+- אל תזכיר מספרי טלפון או שמות סוכנים — הסוכן יוסיף אותם בעצמו`;
+
+  try {
+    const stream = await anthropic.messages.stream({
+      model: 'claude-opus-4-7',
+      max_tokens: 1500,
+      thinking: { type: 'adaptive' },
+      system: SYSTEM,
+      messages: [{ role: 'user', content: userBrief }],
+    });
+    const msg = await stream.finalMessage();
+    const text = msg.content.find(b => b.type === 'text')?.text ?? '';
+
+    // Strip ```json fences if present, just in case
+    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    if (!parsed.story || !parsed.group || !parsed.marketplace) {
+      throw new Error('Claude response missing one of: story, group, marketplace');
+    }
+
+    res.json({
+      story:       parsed.story,
+      group:       parsed.group,
+      marketplace: parsed.marketplace,
+    });
+  } catch (err) {
+    console.error('[marketing/generate] error:', err.message);
+    res.status(500).json({ error: 'Failed to generate marketing variations', detail: err.message });
+  }
 });
 
 // ── Health check ──────────────────────────────────────────────────────────────

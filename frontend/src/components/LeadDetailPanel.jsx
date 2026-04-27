@@ -1,4 +1,6 @@
+import { useState, useEffect } from 'react';
 import { useLang } from '../i18n';
+import CustomFieldInput from './CustomFieldInput';
 
 const STATUS_STYLES = {
   'New':               'badge-new',
@@ -36,9 +38,37 @@ function Field({ label, children }) {
   );
 }
 
-export default function LeadDetailPanel({ lead, agents, onClose, onAssignAgent, onChangeStatus }) {
+export default function LeadDetailPanel({ lead, agents, onClose, onAssignAgent, onChangeStatus, customFieldDefs = [], onSaveCustomFields }) {
   const { t, dir } = useLang();
+
+  // Local edit buffer for custom fields — keeps the UI snappy and only
+  // persists on "save" click (avoids one PUT per keystroke).
+  const [cfDraft, setCfDraft] = useState({});
+  const [cfDirty, setCfDirty] = useState(false);
+  const [cfSaving, setCfSaving] = useState(false);
+
+  useEffect(() => {
+    setCfDraft(lead?.custom_fields || {});
+    setCfDirty(false);
+  }, [lead?.id, lead?.custom_fields]);
+
   if (!lead) return null;
+
+  const setCf = (key, value) => {
+    setCfDraft(prev => ({ ...prev, [key]: value }));
+    setCfDirty(true);
+  };
+
+  const saveCustomFields = async () => {
+    if (!onSaveCustomFields) return;
+    setCfSaving(true);
+    try {
+      await onSaveCustomFields(lead.id, cfDraft);
+      setCfDirty(false);
+    } finally {
+      setCfSaving(false);
+    }
+  };
 
   const formattedDate = lead.created_at
     ? new Date(lead.created_at + (lead.created_at.endsWith('Z') ? '' : 'Z'))
@@ -160,6 +190,37 @@ export default function LeadDetailPanel({ lead, agents, onClose, onAssignAgent, 
               </div>
             </div>
           </section>
+
+          {/* ── Custom fields ── */}
+          {customFieldDefs.length > 0 && (
+            <>
+              <hr style={{ borderColor: 'rgba(255,255,255,0.06)' }} />
+              <section>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest" style={{ color: '#334155' }}>
+                    שדות מותאמים אישית
+                  </h3>
+                  {cfDirty && (
+                    <button onClick={saveCustomFields} disabled={cfSaving}
+                      className="text-[11px] font-bold px-3 py-1 rounded-lg disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', color: 'white' }}>
+                      {cfSaving ? 'שומר...' : '💾 שמור'}
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  {customFieldDefs.map(def => (
+                    <CustomFieldInput
+                      key={def.id}
+                      def={def}
+                      value={cfDraft[def.field_key]}
+                      onChange={v => setCf(def.field_key, v)}
+                    />
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
         </div>
 
         {/* Footer */}

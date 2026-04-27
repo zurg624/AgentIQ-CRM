@@ -73,6 +73,15 @@ export const api = {
   // Reports
   getReports:   ()             => request('/reports'),
 
+  // Custom Fields — admin-managed lead schema extensions
+  getCustomFields:    ()           => request('/custom-fields'),
+  createCustomField:  (body)       => request('/custom-fields',          { method: 'POST',   body: JSON.stringify(body) }),
+  updateCustomField:  (id, body)   => request(`/custom-fields/${id}`,    { method: 'PUT',    body: JSON.stringify(body) }),
+  deleteCustomField:  (id)         => request(`/custom-fields/${id}`,    { method: 'DELETE' }),
+
+  // Marketing AI — 3 platform-tuned variations
+  generateMarketing:  (body)       => request('/marketing/generate',     { method: 'POST',   body: JSON.stringify(body) }),
+
   // Reset
   resetSystem:  ()             => request('/reset',                 { method: 'POST' }),
 };

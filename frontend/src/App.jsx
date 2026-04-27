@@ -78,6 +78,7 @@ function AppInner() {
   const [toast,    setToast]    = useState(null);
   const [settings,       setSettings]       = useState(null);
   const [notifications,  setNotifications]  = useState([]);
+  const [customFieldDefs, setCustomFieldDefs] = useState([]);
 
   // Auth state
   const [user,  setUser]  = useState(() => loadStoredAuth().user);
@@ -113,6 +114,7 @@ function AppInner() {
       .finally(() => setLoading(false));
     api.getSettings().then(setSettings).catch(() => {});
     api.getNotifications().then(setNotifications).catch(() => {});
+    api.getCustomFields().then(setCustomFieldDefs).catch(() => setCustomFieldDefs([]));
   }, [user]);
 
   // SSE for new leads
@@ -243,7 +245,13 @@ function AppInner() {
       {selectedLead && (
         <LeadDetailPanel lead={selectedLead} agents={agents}
           onClose={() => setSelectedLead(null)}
-          onAssignAgent={handleAssignAgent} onChangeStatus={handleChangeStatus} />
+          onAssignAgent={handleAssignAgent} onChangeStatus={handleChangeStatus}
+          customFieldDefs={customFieldDefs}
+          onSaveCustomFields={async (id, customFields) => {
+            const updated = await api.updateLead(id, { custom_fields: customFields });
+            setLeads(prev => prev.map(l => l.id === id ? { ...l, custom_fields: updated.custom_fields } : l));
+            setSelectedLead(prev => prev?.id === id ? { ...prev, custom_fields: updated.custom_fields } : prev);
+          }} />
       )}
 
       {toast && <Toast lead={toast} onClose={() => setToast(null)} />}

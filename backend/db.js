@@ -71,6 +71,20 @@ db.exec(`
     read           INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Custom field DEFINITIONS — admin-managed, defines which extra fields
+  -- exist on every lead in this tenant.  Values themselves live in the
+  -- leads.custom_fields JSON column for fast read with no joins.
+  CREATE TABLE IF NOT EXISTS custom_field_definitions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    field_key   TEXT NOT NULL UNIQUE,
+    label       TEXT NOT NULL,
+    field_type  TEXT NOT NULL,
+    options     TEXT,
+    required    INTEGER NOT NULL DEFAULT 0,
+    position    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // ── Migrations for pre-existing DBs ──────────────────────────────────────────
@@ -78,6 +92,7 @@ const leadCols = db.prepare('PRAGMA table_info(leads)').all().map(c => c.name);
 if (!leadCols.includes('notes'))          db.exec('ALTER TABLE leads ADD COLUMN notes TEXT');
 if (!leadCols.includes('last_contacted')) db.exec('ALTER TABLE leads ADD COLUMN last_contacted TEXT');
 if (!leadCols.includes('owner_username')) db.exec('ALTER TABLE leads ADD COLUMN owner_username TEXT');
+if (!leadCols.includes('custom_fields'))  db.exec("ALTER TABLE leads ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '{}'");
 
 // ── Seed agents ───────────────────────────────────────────────────────────────
 const agentCount = db.prepare('SELECT COUNT(*) as c FROM agents').get().c;

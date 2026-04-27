@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import CustomFieldsManager from '../components/CustomFieldsManager';
 
 function Section({ title, children }) {
   return (
@@ -188,6 +189,17 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
             </p>
           )}
         </Section>
+
+        {/* ── Custom Fields (admin only) ── */}
+        {isAdmin && (
+          <Section title="🧩 שדות מותאמים אישית">
+            <p className="text-xs text-right mb-2" style={{ color: '#94a3b8' }}>
+              הגדר שדות נוספים שיופיעו בכרטיס כל ליד. למשל: "כיתת ילד", "תקציב משכנתא", "מצב משפחתי".
+              סוכנים יראו את השדות בכרטיס הליד ויוכלו למלא אותם.
+            </p>
+            <CustomFieldsManager />
+          </Section>
+        )}
 
         {/* ── Danger zone (admin only) ── */}
         {isAdmin && (
