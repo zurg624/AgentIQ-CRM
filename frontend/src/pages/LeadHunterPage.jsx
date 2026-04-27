@@ -360,6 +360,12 @@ export default function LeadHunterPage({ agents = [], user = null }) {
   const [convertingId,  setConvertingId]  = useState(null);
   const [toast,       setToast]       = useState('');
 
+  // Hunt Mode
+  const [freshCount,  setFreshCount]  = useState(0);
+  const [hunting,     setHunting]     = useState(false);
+  const [huntedLead,  setHuntedLead]  = useState(null); // the just-claimed property
+  const [huntError,   setHuntError]   = useState('');
+
   // Match tab state
   const [matches,   setMatches]   = useState([]);
   const [profiles,  setProfiles]  = useState([]);
@@ -387,6 +393,61 @@ export default function LeadHunterPage({ agents = [], user = null }) {
   }, []);
 
   useEffect(() => { loadProperties(); }, [loadProperties]);
+
+  // Fresh-leads counter — refreshes on mount and every 60s
+  const loadFreshCount = useCallback(async () => {
+    try {
+      const r = await api.getFreshLeadsCount();
+      setFreshCount(r.count || 0);
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => {
+    loadFreshCount();
+    const t = setInterval(loadFreshCount, 60_000);
+    return () => clearInterval(t);
+  }, [loadFreshCount]);
+
+  // Hunt: atomically claim the freshest unclaimed lead
+  const handleHunt = async () => {
+    setHunting(true);
+    setHuntError('');
+    try {
+      const { property } = await api.claimNextLead();
+      setHuntedLead(property);
+      // Optimistically update local list + count
+      setProperties(prev => prev.map(p => p.id === property.id
+        ? { ...p, is_claimed: true, claimed_by: user?.username, assigned_to: user?.username }
+        : p));
+      setFreshCount(c => Math.max(0, c - 1));
+    } catch (err) {
+      const msg = err.message || '';
+      if (msg.includes('no fresh') || msg.includes('404')) {
+        setHuntError('המאגר ריק — לחץ "סרוק" להבאת לידים חדשים');
+      } else if (msg.includes('claimed') || msg.includes('409')) {
+        setHuntError('הליד נחטף ע"י סוכן אחר — נסה שוב');
+        loadFreshCount();
+      } else if (msg.includes('Schema migration')) {
+        setHuntError('צריך להריץ SUPABASE_SCHEMA.sql ב-Supabase (ראה לוגים)');
+      } else {
+        setHuntError(msg);
+      }
+    } finally {
+      setHunting(false);
+    }
+  };
+
+  // Format relative time in Hebrew (for the hunted lead card)
+  const fmtRelative = (iso) => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const mins = Math.round((Date.now() - d.getTime()) / 60_000);
+    if (mins < 1)    return 'עכשיו';
+    if (mins < 60)   return `לפני ${mins} דק'`;
+    if (mins < 1440) return `לפני ${Math.round(mins / 60)} שע'`;
+    return `לפני ${Math.round(mins / 1440)} ימים`;
+  };
 
   // Load matches (Match tab)
   const loadMatches = async (anim = false) => {
@@ -535,6 +596,170 @@ export default function LeadHunterPage({ agents = [], user = null }) {
       {/* ─────────── FACEBOOK TAB ─────────── */}
       {tab === 'facebook' && (
         <div className="space-y-4">
+
+          {/* ── Hunt Mode hero — fresh count + claim button ───────────── */}
+          <div className="rounded-2xl p-5 relative overflow-hidden"
+            style={{
+              background: 'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(239,68,68,0.12))',
+              border: '1px solid rgba(249,115,22,0.35)',
+              boxShadow: '0 0 30px rgba(249,115,22,0.15)',
+            }}>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              {/* Left — counter */}
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <span className="text-5xl font-black"
+                    style={{
+                      background: 'linear-gradient(135deg,#fbbf24,#ef4444)',
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                    }}>
+                    {freshCount}
+                  </span>
+                  {freshCount > 0 && (
+                    <span className="absolute -top-1 -right-2 w-2.5 h-2.5 rounded-full animate-pulse"
+                      style={{ background: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
+                  )}
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {freshCount === 0 ? 'אין לידים טריים במאגר' : 'לידים טריים מחכים לציד'}
+                  </div>
+                  <div className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>
+                    {freshCount === 0
+                      ? 'לחץ "סרוק" כדי למשוך פוסטים חדשים מפייסבוק'
+                      : 'הצייד הבא יהיה הליד הטרי ביותר במאגר'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right — hunt button */}
+              <button
+                onClick={handleHunt}
+                disabled={hunting || freshCount === 0}
+                className="flex items-center gap-2 text-base font-black px-7 py-3.5 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background: hunting
+                    ? 'rgba(255,255,255,0.1)'
+                    : 'linear-gradient(135deg,#f59e0b,#ef4444)',
+                  color: 'white',
+                  boxShadow: hunting ? 'none' : '0 0 24px rgba(239,68,68,0.5)',
+                  transform: hunting ? 'scale(0.98)' : 'scale(1)',
+                }}>
+                {hunting ? (
+                  <><span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> צד...</>
+                ) : (
+                  <><span className="text-xl">🎯</span> צייד ליד טרי</>
+                )}
+              </button>
+            </div>
+
+            {huntError && (
+              <div className="mt-3 text-xs px-3 py-2 rounded-xl text-right"
+                style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }}>
+                ⚠️ {huntError}
+              </div>
+            )}
+          </div>
+
+          {/* ── Hunted lead card — animated reveal ─────────────────────── */}
+          {huntedLead && (
+            <div className="rounded-2xl p-5 space-y-3 relative"
+              style={{
+                background: 'linear-gradient(135deg,#0f1629,#1e1b4b)',
+                border: '2px solid rgba(99,102,241,0.5)',
+                boxShadow: '0 0 40px rgba(99,102,241,0.3)',
+                animation: 'huntPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both',
+              }}>
+              {/* Close */}
+              <button onClick={() => setHuntedLead(null)}
+                className="absolute top-3 left-3 w-7 h-7 rounded-lg flex items-center justify-center text-sm"
+                style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}>✕</button>
+
+              {/* Header */}
+              <div className="flex items-center gap-2 pl-8">
+                <span className="text-2xl">🎯</span>
+                <span className="text-xs font-black tracking-wider px-2.5 py-1 rounded-full"
+                  style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80' }}>
+                  ליד חדש נחטף ✓
+                </span>
+                {huntedLead.original_post_date && (
+                  <span className="text-[11px] mr-auto" style={{ color: '#94a3b8' }}>
+                    {fmtRelative(huntedLead.original_post_date)}
+                  </span>
+                )}
+              </div>
+
+              {/* Title */}
+              <h3 className="text-lg font-bold text-white text-right leading-tight">
+                {huntedLead.title}
+              </h3>
+
+              {/* Meta row */}
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {huntedLead.price > 0 && (
+                  <span className="text-base font-black px-3 py-1 rounded-xl"
+                    style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>
+                    {fmtPrice(huntedLead.price)}
+                  </span>
+                )}
+                {huntedLead.city && (
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
+                    style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
+                    📍 {huntedLead.city}
+                  </span>
+                )}
+                {huntedLead.rooms && (
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }}>
+                    🚪 {huntedLead.rooms} חד'
+                  </span>
+                )}
+                {huntedLead.sqm && (
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
+                    style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }}>
+                    📐 {huntedLead.sqm} מ"ר
+                  </span>
+                )}
+              </div>
+
+              {/* Description */}
+              {huntedLead.description && (
+                <div className="text-sm text-right p-3 rounded-xl"
+                  style={{ background: 'rgba(0,0,0,0.25)', color: '#cbd5e1', maxHeight: 140, overflow: 'auto', lineHeight: 1.6 }}>
+                  {huntedLead.description}
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 flex-wrap justify-end pt-1">
+                {huntedLead.url && (
+                  <a href={huntedLead.url} target="_blank" rel="noopener noreferrer"
+                    className="text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5"
+                    style={{ background: 'rgba(59,130,246,0.18)', color: '#60a5fa' }}>
+                    🔗 פוסט מקורי
+                  </a>
+                )}
+                <button onClick={() => handleConvertCRM(huntedLead)}
+                  disabled={convertingId === huntedLead.id}
+                  className="text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 disabled:opacity-50"
+                  style={{ background: 'rgba(99,102,241,0.22)', color: '#a5b4fc' }}>
+                  {convertingId === huntedLead.id
+                    ? <><span className="w-3 h-3 border border-indigo-400/40 border-t-indigo-300 rounded-full animate-spin" /> ממיר...</>
+                    : <>➕ הוסף ל-CRM</>}
+                </button>
+                <button onClick={() => handleWhatsapp(huntedLead)}
+                  className="text-sm font-black px-5 py-2.5 rounded-xl flex items-center gap-2"
+                  style={{
+                    background: 'linear-gradient(135deg,#22c55e,#16a34a)',
+                    color: 'white',
+                    boxShadow: '0 0 18px rgba(34,197,94,0.4)',
+                  }}>
+                  💬 שלח בוואטסאפ
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Scan control bar */}
           <div className="card rounded-2xl p-4 space-y-3">
@@ -751,6 +976,11 @@ export default function LeadHunterPage({ agents = [], user = null }) {
         @keyframes fadeSlideIn {
           from { opacity: 0; transform: translateY(10px); }
           to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes huntPop {
+          0%   { opacity: 0; transform: scale(0.85) translateY(-20px); }
+          60%  { opacity: 1; transform: scale(1.02) translateY(0); }
+          100% { opacity: 1; transform: scale(1)    translateY(0); }
         }
       `}</style>
     </div>

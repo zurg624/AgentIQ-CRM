@@ -214,7 +214,31 @@ function mapItem(raw) {
   // Use the cleaned post body for description so it's UI-ready and human-readable
   const description = cleanText ?? raw.details ?? null;
 
-  return { title, price, city, area, type, rooms, sqm, url, source, description };
+  // ── original_post_date — when the Facebook post was actually published ──
+  // Different Apify actors use different field names; we accept ISO strings,
+  // unix seconds, or unix milliseconds and normalise to an ISO string.
+  const dateRaw =
+    raw.time          ??   // most fb-* actors
+    raw.timestamp     ??
+    raw.date          ??
+    raw.publishedAt   ??
+    raw.published_at  ??
+    raw.posted_at     ??
+    raw.createdTime   ??
+    raw.created_time  ??
+    raw.createdAt     ??
+    raw.created_at    ??
+    null;
+
+  let original_post_date = null;
+  if (dateRaw != null) {
+    const d = typeof dateRaw === 'number'
+      ? new Date(dateRaw < 1e12 ? dateRaw * 1000 : dateRaw)   // seconds vs ms
+      : new Date(dateRaw);
+    if (!isNaN(d.getTime())) original_post_date = d.toISOString();
+  }
+
+  return { title, price, city, area, type, rooms, sqm, url, source, description, original_post_date };
 }
 
 // ── Normalise body for legacy / manual callers ────────────────────────────────
@@ -242,32 +266,49 @@ async function upsertToSupabase(rows) {
   let saved = 0;
   const errors = [];
 
-  if (withUrl.length > 0) {
-    const { data, error } = await supabase
-      .from('properties')
-      .upsert(withUrl, { onConflict: 'url', ignoreDuplicates: true })
-      .select('id, url');
+  // Strip a column from every row (used to retry when Supabase rejects an
+  // unknown column — happens when the user hasn't run SUPABASE_SCHEMA.sql yet).
+  const stripCol = (arr, col) => arr.map(r => { const c = { ...r }; delete c[col]; return c; });
 
-    if (error) {
-      console.error('[supabase] upsert error:', error.message);
-      errors.push(error.message);
-    } else {
-      saved += data?.length ?? 0;
+  // Try the upsert; if it complains about a column, drop that column and retry.
+  // Caps retries so we don't loop forever.
+  async function tryUpsert(payload, opts) {
+    let body = payload;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const q = supabase.from('properties');
+      const { data, error } = await (opts.upsert
+        ? q.upsert(body, opts.upsert).select(opts.select)
+        : q.insert(body).select(opts.select));
+
+      if (!error) return { data, error: null };
+
+      // Match: `Could not find the 'is_claimed' column of 'properties' in the schema cache`
+      const colMatch = error.message?.match(/'([\w_]+)'\s+column/i)
+                    || error.message?.match(/column\s+"([\w_]+)"/i);
+      if (colMatch) {
+        const missing = colMatch[1];
+        console.warn(`[supabase] dropping unknown column "${missing}" and retrying — run SUPABASE_SCHEMA.sql to fix permanently`);
+        body = stripCol(body, missing);
+        continue;
+      }
+      return { data: null, error };
     }
+    return { data: null, error: new Error('too many schema-mismatch retries') };
+  }
+
+  if (withUrl.length > 0) {
+    const { data, error } = await tryUpsert(withUrl, {
+      upsert: { onConflict: 'url', ignoreDuplicates: true },
+      select: 'id, url',
+    });
+    if (error) { console.error('[supabase] upsert error:', error.message); errors.push(error.message); }
+    else       { saved += data?.length ?? 0; }
   }
 
   if (withoutUrl.length > 0) {
-    const { data, error } = await supabase
-      .from('properties')
-      .insert(withoutUrl)
-      .select('id');
-
-    if (error) {
-      console.error('[supabase] insert (no-url) error:', error.message);
-      errors.push(error.message);
-    } else {
-      saved += data?.length ?? 0;
-    }
+    const { data, error } = await tryUpsert(withoutUrl, { select: 'id' });
+    if (error) { console.error('[supabase] insert error:', error.message); errors.push(error.message); }
+    else       { saved += data?.length ?? 0; }
   }
 
   const skipped = rows.length - saved - errors.length;

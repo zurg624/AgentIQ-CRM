@@ -54,6 +54,10 @@ export const api = {
   deleteProperty:       (id)    => request(`/properties/${id}`,       { method: 'DELETE' }),
   assignPropertyAgent:  (id, n) => request(`/properties/${id}/assign`,{ method: 'PATCH',  body: JSON.stringify({ assigned_to: n }) }),
 
+  // Hunt Mode — fresh lead counter + atomic claim
+  getFreshLeadsCount:   ()      => request('/properties/fresh-count'),
+  claimNextLead:        ()      => request('/properties/claim',       { method: 'POST' }),
+
   getNotifications:     ()      => request('/notifications'),
   markNotifRead:        (id)    => request(`/notifications/${id}/read`, { method: 'PATCH' }),
   markAllNotifsRead:    ()      => request('/notifications/read-all',   { method: 'POST' }),
