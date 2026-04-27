@@ -761,7 +761,8 @@ export default function LeadHunterPage({ agents = [], user = null }) {
             </div>
           )}
 
-          {/* Scan control bar */}
+          {/* Scan control bar — admin-only (cost control on Apify Actor runs) */}
+          {isAdmin && (
           <div className="card rounded-2xl p-4 space-y-3">
             {/* Row 1 — refresh + count */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -832,6 +833,22 @@ export default function LeadHunterPage({ agents = [], user = null }) {
               </div>
             )}
           </div>
+          )}
+
+          {/* For non-admin agents: a small refresh-only bar */}
+          {!isAdmin && (
+            <div className="card rounded-2xl p-3 flex items-center justify-between">
+              <button onClick={loadProperties} disabled={propLoading}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl disabled:opacity-60"
+                style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)' }}>
+                {propLoading ? <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : '🔄'}
+                רענן רשימה
+              </button>
+              <span className="text-xs" style={{ color: '#475569' }}>
+                {properties.length} נכסים במאגר
+              </span>
+            </div>
+          )}
 
           {/* Delete confirm hint */}
           {deleteConfirm && (

@@ -25,6 +25,28 @@ const SIMULATE_LEADS = [
   { name: 'מרים אבו-עבד', phone: '058-6677889', source: 'WhatsApp', message: 'أبحث عن شقة في حيفا، 4 غرف، قريبة من المدارس' },
 ];
 
+// ── UI: blocked-page notice for non-admins who hit an admin-only route ───────
+function AdminOnlyNotice({ onBack }) {
+  return (
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="max-w-md w-full text-center rounded-2xl p-8 space-y-4"
+        style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)' }}>
+        <div className="text-5xl">🔒</div>
+        <h2 className="text-lg font-bold text-white">אזור למנהלי מערכת בלבד</h2>
+        <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+          העמוד הזה מכיל הגדרות גלובליות של המערכת — עמלות, סטטוסים, חיבורי API ועוד.<br/>
+          רק משתמש בתפקיד "מנהל" יכול לגשת אליו. אם אתה צריך גישה, פנה למנהל החשבון.
+        </p>
+        <button onClick={onBack}
+          className="text-sm font-bold px-5 py-2 rounded-xl transition-all"
+          style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', color: 'white' }}>
+          ← חזרה ל-CRM
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 function loadStoredAuth() {
   try {
@@ -210,8 +232,10 @@ function AppInner() {
           {page === 'marketing' && <MarketingAIPage />}
           {page === 'packages'  && <PackagesPage />}
           {page === 'reports'   && <ReportsPage systemName={systemName} />}
-          {page === 'settings'  && (
-            <SettingsPage settings={settings} onSettingsChange={setSettings} user={user} />
+          {page === 'settings' && (
+            user.role === 'admin'
+              ? <SettingsPage settings={settings} onSettingsChange={setSettings} user={user} />
+              : <AdminOnlyNotice onBack={() => setPage('crm')} />
           )}
         </div>
       </main>

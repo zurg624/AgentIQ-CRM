@@ -12,7 +12,7 @@ const NAV = [
   { key: 'marketing', label: '📣 שיווק AI' },
   { key: 'packages',  label: '🪙 חבילות' },
   { key: 'reports',   label: '📈 מרכז דוחות' },
-  { key: 'settings',  label: '⚙️ הגדרות' },
+  { key: 'settings',  label: '⚙️ ניהול מערכת', adminOnly: true },
 ];
 
 const MOBILE_NAV = ['crm', 'hunter', 'dealcalc', 'reports', 'settings'];
@@ -21,6 +21,10 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
   const { lang, setLang } = useLang();
   const [open, setOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
+
+  // Hide admin-only items from non-admin users
+  const isAdmin = user?.role === 'admin';
+  const visibleNav = NAV.filter(item => !item.adminOnly || isAdmin);
 
   const handleLogout = () => {
     if (confirmLogout) { onLogout?.(); }
@@ -51,7 +55,7 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {NAV.map(({ key, label }) => (
+          {visibleNav.map(({ key, label }) => (
             <button key={key} onClick={() => setPage(key)}
               className={`w-full text-right px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${page === key ? 'nav-active' : ''}`}
               style={page === key
@@ -153,7 +157,7 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
           <nav className="absolute top-0 right-0 h-full w-64 py-16 px-3 space-y-1 overflow-y-auto"
             style={{ background: '#0a0d1c', borderLeft: '1px solid rgba(255,255,255,0.07)' }}
             onClick={e => e.stopPropagation()}>
-            {NAV.map(({ key, label }) => (
+            {visibleNav.map(({ key, label }) => (
               <button key={key} onClick={() => { setPage(key); setOpen(false); }}
                 className="w-full text-right px-4 py-3 rounded-xl text-sm font-medium"
                 style={page === key
@@ -175,7 +179,7 @@ export default function Sidebar({ page, setPage, user, onLogout, systemName = 'A
 
       {/* ── Mobile bottom tabs ─────────────────────────────────────── */}
       <div className="mobile-nav">
-        {NAV.filter(n => MOBILE_NAV.includes(n.key)).map(({ key, label }) => {
+        {visibleNav.filter(n => MOBILE_NAV.includes(n.key)).map(({ key, label }) => {
           const [emoji, ...rest] = label.split(' ');
           const isActive = page === key;
           const unread = notifications.filter(n => !n.read).length;

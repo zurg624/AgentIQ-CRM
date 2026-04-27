@@ -15,6 +15,9 @@ try {
 const { ensurePgSchema, pgInsertProperty, checkSupabaseHealth } = require('./pgClient');
 ensurePgSchema(); // verify / create table on startup
 
+// Auth middleware — admin-only routes use requireAdmin
+const { requireAdmin } = require('./middleware/auth');
+
 const app = express();
 
 // ── Request logger (shows every hit in Render logs) ──────────────────────────
@@ -570,7 +573,7 @@ app.use('/api/ingest/apify',
 // /api/properties — Supabase-backed CRUD (list, update, delete, assign)
 app.use('/api/properties', require('./routes/propertiesApi')());
 
-// POST /api/apify/run — trigger an Apify Actor run on demand
+// POST /api/apify/run — trigger an Apify Actor run on demand (ADMIN-ONLY: cost control)
 //
 // Input resolution (first truthy source wins):
 //   1. req.body.startUrls  — passed explicitly from the frontend
@@ -581,7 +584,7 @@ app.use('/api/properties', require('./routes/propertiesApi')());
 //   APIFY_TOKEN     – Apify personal access token
 //   APIFY_ACTOR_ID  – Actor ID or "username/actor-name", e.g. "apify/facebook-groups-scraper"
 //   APIFY_START_URLS – comma-separated FB group URLs used as default when none supplied
-app.post('/api/apify/run', async (req, res) => {
+app.post('/api/apify/run', requireAdmin, async (req, res) => {
   const token   = process.env.APIFY_TOKEN;
   const actorId = process.env.APIFY_ACTOR_ID;
   if (!token)   return res.status(503).json({ error: 'APIFY_TOKEN not configured on server' });
@@ -825,7 +828,7 @@ app.get('/api/settings', (req, res) => {
   res.json(obj);
 });
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', requireAdmin, (req, res) => {
   const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   const tx = db.transaction(updates => {
     for (const [k, v] of Object.entries(updates)) upsert.run(k, String(v));
@@ -838,7 +841,8 @@ app.put('/api/settings', (req, res) => {
 });
 
 // ── System reset ──────────────────────────────────────────────────────────────
-app.post('/api/reset', (req, res) => {
+// ADMIN-ONLY: wipes all leads — destructive, irreversible
+app.post('/api/reset', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM leads').run();
   res.json({ ok: true });
 });
