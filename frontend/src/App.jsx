@@ -232,7 +232,7 @@ function AppInner() {
           {page === 'dealcalc'  && <ToolsPage settings={settings} />}
           {page === 'hunter'    && <LeadHunterPage agents={agents} user={user} />}
           {page === 'marketing' && <MarketingAIPage />}
-          {page === 'packages'  && <PackagesPage />}
+          {page === 'packages'  && <PackagesPage settings={settings} />}
           {page === 'reports'   && <ReportsPage systemName={systemName} />}
           {page === 'settings' && (
             user.role === 'admin'

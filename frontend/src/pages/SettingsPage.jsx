@@ -22,7 +22,7 @@ function Field({ label, hint, children }) {
 }
 
 export default function SettingsPage({ settings, onSettingsChange, user }) {
-  const [form,    setForm]    = useState({ system_name: 'AgentIQ', vat_pct: '17', brokerage_pct: '2', lawyer_pct: '0.5' });
+  const [form,    setForm]    = useState({ system_name: 'AgentIQ', support_phone: '', vat_pct: '17', brokerage_pct: '2', lawyer_pct: '0.5' });
   const [saving,  setSaving]  = useState(false);
   const [toast,   setToast]   = useState('');
   const [confirm, setConfirm] = useState('');
@@ -119,6 +119,12 @@ export default function SettingsPage({ settings, onSettingsChange, user }) {
           <Field label="שם המערכת" hint="ישתקף בממשק ובדוחות">
             <input value={form.system_name} onChange={e => set('system_name', e.target.value)}
               className="dark-input w-full px-3 py-2.5 text-sm rounded-xl" placeholder="AgentIQ" />
+          </Field>
+
+          <Field label="טלפון תמיכה / מכירות (WhatsApp)" hint="ילך לקישורים ב-'חבילות'. דוגמה: 0501234567">
+            <input value={form.support_phone || ''} onChange={e => set('support_phone', e.target.value)}
+              dir="ltr"
+              className="dark-input w-full px-3 py-2.5 text-sm rounded-xl font-mono" placeholder="0501234567" />
           </Field>
 
           {/* Live preview */}

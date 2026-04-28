@@ -9,6 +9,60 @@ const STATUS_STYLES = {
 
 const SOURCE_ICONS = { Yad2: '🏠', Facebook: '📘', WhatsApp: '💬', Manual: '✍️' };
 
+// Build a Google Calendar "create event" link prefilled with the lead.
+// Default the meeting to tomorrow 10:00 (Israel time) for ~45 min — the agent
+// can edit before saving. We pass UTC times in YYYYMMDDTHHmmssZ format.
+function buildCalendarLink(lead) {
+  const start = new Date();
+  start.setDate(start.getDate() + 1);
+  start.setHours(10, 0, 0, 0);
+  const end = new Date(start.getTime() + 45 * 60 * 1000);
+  const fmt = d => d.toISOString().replace(/[-:]|\.\d{3}/g, '');
+
+  const title   = `פגישה עם ${lead.name || 'ליד'}`;
+  const details = [
+    `ליד: ${lead.name || ''}`,
+    `טלפון: ${lead.phone || ''}`,
+    `מקור: ${lead.source || ''}`,
+    lead.message ? `\nהודעה:\n${lead.message}` : '',
+  ].filter(Boolean).join('\n');
+
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text:   title,
+    dates:  `${fmt(start)}/${fmt(end)}`,
+    details,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function QuickActions({ lead }) {
+  const phoneDigits = (lead.phone || '').replace(/\D/g, '');
+  const waLink = `https://wa.me/${phoneDigits}?text=${encodeURIComponent(`היי ${lead.name || ''}, מ-AgentIQ — ראיתי את הפנייה שלך`)}`;
+
+  // stopPropagation so clicking the action doesn't open the side panel
+  const stop = e => e.stopPropagation();
+
+  const btn = (extra = {}) => ({
+    className: 'w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all',
+    onClick: stop,
+    target: '_blank',
+    rel: 'noreferrer',
+    ...extra,
+  });
+
+  return (
+    <div className="flex items-center gap-1.5" onClick={stop}>
+      <a {...btn()} href={`tel:${lead.phone || ''}`} title="חיוג"
+        style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>📞</a>
+      <a {...btn()} href={waLink} title="WhatsApp"
+        style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80' }}>💬</a>
+      <a {...btn()} href={buildCalendarLink(lead)} title="קבע פגישה ב-Google Calendar"
+        style={{ background: 'rgba(139,92,246,0.18)', color: '#c4b5fd' }}>📅</a>
+    </div>
+  );
+}
+
 export default function LeadsTable({ leads, agents, onAssignAgent, onChangeStatus, onSelectLead }) {
   const { t } = useLang();
 
@@ -25,7 +79,7 @@ export default function LeadsTable({ leads, agents, onAssignAgent, onChangeStatu
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-              {[t('col_name'), t('col_phone'), t('col_source'), t('col_agent'), t('col_status'), ''].map((h, i) => (
+              {[t('col_name'), t('col_phone'), t('col_source'), t('col_agent'), t('col_status'), 'פעולות', ''].map((h, i) => (
                 <th key={i} className="text-right px-6 py-3 text-xs font-semibold uppercase tracking-wide"
                   style={{ color: '#475569' }}>{h}</th>
               ))}
@@ -62,6 +116,9 @@ export default function LeadsTable({ leads, agents, onAssignAgent, onChangeStatu
                     className={`text-xs font-medium border-0 rounded-full px-3 py-1 cursor-pointer focus:outline-none ${STATUS_STYLES[lead.status] ?? 'badge-new'}`}>
                     {['New','Contacted','Meeting Scheduled','Closed'].map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
+                </td>
+                <td className="px-3 py-4">
+                  <QuickActions lead={lead} />
                 </td>
                 <td className="px-6 py-4 text-right" style={{ color: '#334155' }}>›</td>
               </tr>

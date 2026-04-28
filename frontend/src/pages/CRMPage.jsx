@@ -345,6 +345,11 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
   const [search,     setSearch]     = useState('');
   const [rankFilter, setRankFilter] = useState('הכל');
   const [statFilter, setStatFilter] = useState('הכל');
+  const [budgetMin,  setBudgetMin]  = useState(''); // in M (millions ₪)
+  const [budgetMax,  setBudgetMax]  = useState('');
+  const [meetFrom,   setMeetFrom]   = useState(''); // YYYY-MM-DD
+  const [meetTo,     setMeetTo]     = useState('');
+  const [showAdv,    setShowAdv]    = useState(false);
   const [selected,   setSelected]   = useState(new Set());
   const [modal,      setModal]      = useState(null); // null | 'add' | { type:'edit', lead } | { type:'notes', lead }
   const [deleteTarget, setDeleteTarget] = useState(null); // null | 'bulk' | leadId
@@ -365,8 +370,29 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
       if (rankFilter === 'פושר' && hot) return false;
     }
     if (statFilter !== 'הכל' && l.status !== statFilter) return false;
+
+    // Budget range — values entered in millions; budget on lead is in ₪
+    if (budgetMin) {
+      const min = parseFloat(budgetMin) * 1_000_000;
+      if (!l.budget || l.budget < min) return false;
+    }
+    if (budgetMax) {
+      const max = parseFloat(budgetMax) * 1_000_000;
+      if (!l.budget || l.budget > max) return false;
+    }
+
+    // Meeting date range (last_contacted)
+    if (meetFrom || meetTo) {
+      if (!l.last_contacted) return false;
+      const d = l.last_contacted.slice(0, 10); // YYYY-MM-DD
+      if (meetFrom && d < meetFrom) return false;
+      if (meetTo   && d > meetTo)   return false;
+    }
+
     return true;
-  }), [rows, search, rankFilter, statFilter]);
+  }), [rows, search, rankFilter, statFilter, budgetMin, budgetMax, meetFrom, meetTo]);
+
+  const advActive = !!(budgetMin || budgetMax || meetFrom || meetTo);
 
   const allChecked = filtered.length > 0 && filtered.every(l => selected.has(l.id));
   const someChecked = filtered.some(l => selected.has(l.id));
@@ -508,14 +534,64 @@ export default function CRMPage({ leads, loading, onChangeStatus, onSimulate, si
           <option value="הכל">כל הסטטוסים</option>
           {STATUS_KEYS.map(k => <option key={k} value={k}>{STATUS_MAP[k].label}</option>)}
         </select>
-        {(search || rankFilter !== 'הכל' || statFilter !== 'הכל') && (
-          <button onClick={() => { setSearch(''); setRankFilter('הכל'); setStatFilter('הכל'); }}
+        {/* Advanced filters toggle */}
+        <button onClick={() => setShowAdv(v => !v)}
+          className="text-xs px-3 py-1.5 rounded-xl font-medium transition-colors"
+          style={advActive || showAdv
+            ? { background: 'rgba(99,102,241,0.18)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.35)' }
+            : { background: 'rgba(255,255,255,0.05)', color: '#64748b', border: '1px solid rgba(255,255,255,0.07)' }}>
+          ⚙️ סינון מתקדם {advActive && <span className="mr-1">●</span>}
+        </button>
+        {(search || rankFilter !== 'הכל' || statFilter !== 'הכל' || advActive) && (
+          <button onClick={() => {
+            setSearch(''); setRankFilter('הכל'); setStatFilter('הכל');
+            setBudgetMin(''); setBudgetMax(''); setMeetFrom(''); setMeetTo('');
+          }}
             className="text-xs px-2.5 py-1 rounded-full" style={{ color: '#ef4444' }}>✕ נקה</button>
         )}
         {filtered.length !== leads.length && (
           <span className="text-xs" style={{ color: '#475569' }}>מציג {filtered.length} מתוך {leads.length}</span>
         )}
       </div>
+
+      {/* Advanced filter panel — collapsible */}
+      {showAdv && (
+        <div className="px-4 md:px-6 pb-3 flex-shrink-0">
+          <div className="rounded-2xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3"
+            style={{ background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.18)' }}>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>
+                תקציב מינ' (₪M)
+              </label>
+              <input type="number" value={budgetMin} onChange={e => setBudgetMin(e.target.value)}
+                placeholder="1.5" min="0" step="0.1"
+                className="dark-input w-full px-3 py-2 text-sm rounded-xl" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>
+                תקציב מקס' (₪M)
+              </label>
+              <input type="number" value={budgetMax} onChange={e => setBudgetMax(e.target.value)}
+                placeholder="3.5" min="0" step="0.1"
+                className="dark-input w-full px-3 py-2 text-sm rounded-xl" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>
+                פגישה מ-
+              </label>
+              <input type="date" value={meetFrom} onChange={e => setMeetFrom(e.target.value)}
+                className="dark-input w-full px-3 py-2 text-sm rounded-xl" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>
+                פגישה עד-
+              </label>
+              <input type="date" value={meetTo} onChange={e => setMeetTo(e.target.value)}
+                className="dark-input w-full px-3 py-2 text-sm rounded-xl" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Leads — table on desktop, cards on mobile */}
       <div className="flex-1 px-4 md:px-6 pb-6 overflow-auto">

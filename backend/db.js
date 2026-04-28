@@ -130,6 +130,7 @@ const settingsCount = db.prepare('SELECT COUNT(*) as c FROM settings').get().c;
 if (settingsCount === 0) {
   const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
   ins.run('system_name',    'AgentIQ');
+  ins.run('support_phone',  '');
   ins.run('vat_pct',        '17');
   ins.run('brokerage_pct',  '2');
   ins.run('lawyer_pct',     '0.5');
