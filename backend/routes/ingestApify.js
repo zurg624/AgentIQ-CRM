@@ -241,6 +241,34 @@ function mapItem(raw) {
   return { title, price, city, area, type, rooms, sqm, url, source, description, original_post_date };
 }
 
+// ── Anti-broker filter ────────────────────────────────────────────────────────
+// SaaS rule: the Lead Hunter pool must contain ONLY private sellers.
+// Posts authored by other agents/agencies are silently dropped at ingestion —
+// they never enter the pool, so an agent claiming a lead can never be embarrassed
+// by ending up on the phone with a competing broker.
+const BROKER_BLOCKLIST = [
+  // Hebrew — exclusive listings & agency self-identification
+  'בבלעדיות', 'בבלעדיות אצלי', 'בלעדי אצלי', 'בלעדיות אצלנו',
+  'ללא עמלת תיווך מצד קונה', 'ללא עמלה מצד קונה', 'ללא עמלה לקונה',
+  'ללא עמלת קונה', 'בלי עמלת תיווך', 'אפס עמלה',
+  'משרד תיווך', 'משרד התיווך', 'תיווך הבית', 'תיווך נדל"ן', 'תיווך נדלן',
+  'מתווך', 'מתווכת', 'מתווכים', 'סוכן נדל"ן', 'סוכנת נדל"ן',
+  'לפרטים בפרטי', 'פרטים בהודעה פרטית',
+  // English brand chains active in Israel
+  'remax', 're/max', 'anglo saxon', 'אנגלו סכסון',
+  'century 21', 'קנדה ישראל', 'keller williams', 'kw israel',
+  'realty', 'realtor',
+];
+
+function isBrokerPost(row) {
+  const haystack = [row.title, row.description]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!haystack) return false;
+  return BROKER_BLOCKLIST.some(kw => haystack.includes(kw.toLowerCase()));
+}
+
 // ── Normalise body for legacy / manual callers ────────────────────────────────
 
 function normaliseBody(body) {
@@ -352,10 +380,19 @@ module.exports = function createApifyRouter({ db, broadcast, ingestOneProperty }
     }
 
     const mappedRows = rawItems.map(mapItem);
-    const supabaseResult = await upsertToSupabase(mappedRows);
+
+    // Anti-broker gate — only private sellers reach the pool.
+    const beforeFilter = mappedRows.length;
+    const cleanRows = mappedRows.filter(r => !isBrokerPost(r));
+    const filteredBrokers = beforeFilter - cleanRows.length;
+    if (filteredBrokers > 0) {
+      console.log(`[ingest/apify] anti-broker filter: rejected ${filteredBrokers}/${beforeFilter} broker posts`);
+    }
+
+    const supabaseResult = await upsertToSupabase(cleanRows);
 
     const localResults = [];
-    for (const item of mappedRows) {
+    for (const item of cleanRows) {
       if (!item.title) continue;
       try {
         const r = await ingestOneProperty(item);
@@ -369,14 +406,15 @@ module.exports = function createApifyRouter({ db, broadcast, ingestOneProperty }
       .filter(r => r?.matches)
       .reduce((s, r) => s + r.matches.length, 0);
 
-    console.log(`[ingest/apify] done — ${supabaseResult.saved} saved, ${supabaseResult.skipped} skipped, ${totalMatches} matches`);
+    console.log(`[ingest/apify] done — ${supabaseResult.saved} saved, ${supabaseResult.skipped} skipped, ${filteredBrokers} brokers filtered, ${totalMatches} matches`);
 
     res.status(201).json({
-      received:        rawItems.length,
-      saved_supabase:  supabaseResult.saved,
-      skipped_dupes:   supabaseResult.skipped,
-      supabase_errors: supabaseResult.errors,
-      lead_matches:    totalMatches,
+      received:         rawItems.length,
+      filtered_brokers: filteredBrokers,
+      saved_supabase:   supabaseResult.saved,
+      skipped_dupes:    supabaseResult.skipped,
+      supabase_errors:  supabaseResult.errors,
+      lead_matches:     totalMatches,
     });
   });
 

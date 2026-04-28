@@ -351,17 +351,30 @@ export default function LeadHunterPage({ user = null }) {
       const lead = r.property;
       setMyLeads(prev => [lead, ...prev.filter(p => p.id !== lead.id)]);
       if (r.quota) setQuota(r.quota);
-      const where = lead.city ? ` מ${lead.city}` : '';
-      setFlash(`ליד חדש: ${displayName(lead)}${where}`);
-      setTimeout(() => setFlash(''), 5000);
+
+      // Build the rich "lead מהתנור" banner with all the live evidence.
+      const cityLabel = r.matched?.city || lead.city;
+      const parts = [`✨ נמצא ליד טרי`];
+      if (cityLabel) parts.push(`ב-${cityLabel}`);
+      if (typeof r.minutes_ago === 'number') {
+        parts.push(`שפורסם לפני ${r.minutes_ago} דק׳`);
+      }
+      setFlash(parts.join(' '));
+      setTimeout(() => setFlash(''), 7000);
       loadFacets();
     } catch (err) {
       const msg = err.message || '';
+      // The agent's chosen city is the one we searched for — show a
+      // city-specific message so it feels like a personal hunt.
+      const searchedCity = filterCity !== 'all' ? filterCity : null;
+
       if (msg.includes('quota') || msg.includes('מכסה')) {
         setError('ניצלת את המכסה החודשית, שדרג כדי להמשיך לצוד');
         loadQuota();
       } else if (msg.includes('no fresh') || msg.includes('404')) {
-        setError('אין לידים מתאימים במאגר — נסה סינון אחר או רענן מאוחר יותר');
+        setError(searchedCity
+          ? `מחפשים עבורך לידים חדשים ב-${searchedCity}... נסה שוב בעוד כמה דקות`
+          : 'המאגר ריק כרגע — Apify יזרים לידים חדשים בקרוב, נסה שוב בעוד כמה דקות');
       } else if (msg.includes('claimed') || msg.includes('409')) {
         setError('הליד נחטף ע"י סוכן אחר — נסה שוב');
       } else if (msg.includes('Schema migration')) {
@@ -493,13 +506,28 @@ export default function LeadHunterPage({ user = null }) {
           </div>
         )}
 
-        {/* Success flash banner */}
+        {/* Success flash banner — pulses briefly to sell the "live hunt" feel */}
         {flash && (
-          <div className="mt-3 px-4 py-2.5 rounded-xl text-sm font-bold text-right"
-            style={{ background: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.3)' }}>
-            ✅ {flash}
+          <div
+            key={flash}
+            className="mt-3 px-4 py-3 rounded-xl text-sm font-bold text-right hunter-flash"
+            style={{
+              background: 'linear-gradient(135deg, rgba(34,197,94,0.18), rgba(16,185,129,0.12))',
+              color: '#4ade80',
+              border: '1px solid rgba(34,197,94,0.4)',
+              boxShadow: '0 0 24px rgba(34,197,94,0.18)',
+            }}>
+            {flash}
           </div>
         )}
+        <style>{`
+          @keyframes hunter-flash-in {
+            0%   { opacity: 0; transform: translateY(-6px) scale(0.98); }
+            60%  { opacity: 1; transform: translateY(0)    scale(1.015); }
+            100% { opacity: 1; transform: translateY(0)    scale(1); }
+          }
+          .hunter-flash { animation: hunter-flash-in 480ms ease-out; }
+        `}</style>
 
         {/* Error banner */}
         {error && (

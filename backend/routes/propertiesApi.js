@@ -7,6 +7,12 @@ const db = require('../db');
 // Per-plan monthly claim quota.  Infinity = unlimited.
 const PLAN_QUOTA = { base: 10, pro: Infinity, elite: Infinity };
 
+// Rolling-inventory window — unclaimed leads vanish from the pool after this
+// many hours so the Hunter UI never shows yesterday's news. Enforced both at
+// query time (filter) and via a periodic DELETE (free DB space).
+const POOL_TTL_HOURS = 24;
+const poolTtlIso = () => new Date(Date.now() - POOL_TTL_HOURS * 3600_000).toISOString();
+
 // Start of the current calendar month (UTC) — anchor for monthly quota counting.
 function startOfMonthIso() {
   const d = new Date();
@@ -47,7 +53,47 @@ function userFromAuth(req) {
   } catch { return null; }
 }
 
+// ── Rolling-inventory cleanup ─────────────────────────────────────────────────
+// Hard-delete unclaimed pool leads older than POOL_TTL_HOURS. Runs on backend
+// boot and then every hour. Claimed leads are NEVER touched — they belong to
+// the agent and stay in their pipeline forever.
+async function cleanupStalePool() {
+  if (!supabase) return;
+  const cutoff = poolTtlIso();
+  try {
+    const { error, count } = await supabase
+      .from('properties')
+      .delete({ count: 'exact' })
+      .eq('is_claimed', false)
+      .lt('ingested_at', cutoff);
+    if (error) {
+      // is_claimed/ingested_at may not exist yet — schema not migrated.
+      if (error.message?.includes('column')) return;
+      console.warn('[pool-cleanup] error:', error.message);
+      return;
+    }
+    if (count && count > 0) {
+      console.log(`[pool-cleanup] purged ${count} stale unclaimed leads (>${POOL_TTL_HOURS}h)`);
+    }
+  } catch (e) {
+    console.warn('[pool-cleanup] unexpected:', e.message);
+  }
+}
+
+// Kick off on require, then every hour. setInterval handle is unref'd so it
+// doesn't keep the process alive during graceful shutdown.
+let cleanupTimer = null;
+function startCleanupSchedule() {
+  if (cleanupTimer) return;
+  cleanupStalePool();  // run once immediately
+  cleanupTimer = setInterval(cleanupStalePool, 60 * 60 * 1000);
+  if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
+  console.log(`[pool-cleanup] scheduled — runs hourly, TTL=${POOL_TTL_HOURS}h`);
+}
+
 module.exports = function createPropertiesRouter() {
+  // Start the rolling-inventory cleanup as soon as the router is mounted.
+  startCleanupSchedule();
   const router = express.Router();
 
   // GET /api/properties/fresh-count — how many unclaimed leads are in the pool
@@ -56,7 +102,8 @@ module.exports = function createPropertiesRouter() {
     const { count, error } = await supabase
       .from('properties')
       .select('id', { count: 'exact', head: true })
-      .eq('is_claimed', false);
+      .eq('is_claimed', false)
+      .gte('ingested_at', poolTtlIso());
     if (error) {
       // is_claimed column missing → schema not migrated yet
       if (error.message?.includes('is_claimed') || error.message?.includes('column')) {
@@ -132,12 +179,24 @@ module.exports = function createPropertiesRouter() {
     // Optional filters from body
     const { city, type } = req.body || {};
 
-    // 1. Find the freshest unclaimed lead matching filters.
-    //    Prefer original_post_date (the FB post time), fall back to ingested_at.
+    // Live freshness window — only claim leads that hit the system in the last
+    // N minutes (default 60). This is what makes the "🔥 lead מהתנור" feel real.
+    // Clamp 5..1440 so a misbehaving client can't widen it to forever.
+    const freshnessMinutes = Math.min(
+      Math.max(parseInt(req.body?.freshness_minutes, 10) || 60, 5),
+      1440
+    );
+    const freshSince = new Date(Date.now() - freshnessMinutes * 60_000).toISOString();
+
+    // 1. Find the freshest unclaimed lead matching filters AND inside the
+    //    freshness window. Prefer original_post_date; if it's NULL we accept
+    //    leads whose ingested_at is fresh enough (newly-scraped, undated posts).
     let q = supabase
       .from('properties')
       .select('*')
-      .eq('is_claimed', false);
+      .eq('is_claimed', false)
+      .gte('ingested_at', poolTtlIso())  // 24h rolling window
+      .or(`original_post_date.gte.${freshSince},and(original_post_date.is.null,ingested_at.gte.${freshSince})`);
     if (city && city !== 'all') q = q.eq('city', city);
     if (type && type !== 'all') q = q.eq('type', type);
 
@@ -157,7 +216,13 @@ module.exports = function createPropertiesRouter() {
     }
 
     if (!candidates || candidates.length === 0) {
-      return res.status(404).json({ error: 'no fresh leads available' });
+      // City-aware 404 so the UI can show "מחפשים עבורך לידים ב-{city}..."
+      return res.status(404).json({
+        error: 'no fresh leads available',
+        searched_city: city && city !== 'all' ? city : null,
+        searched_type: type && type !== 'all' ? type : null,
+        freshness_minutes: freshnessMinutes,
+      });
     }
     const lead = candidates[0];
 
@@ -186,10 +251,22 @@ module.exports = function createPropertiesRouter() {
 
     console.log(`[claim] ${me.username} claimed property ${claimed.id} — "${(claimed.title || '').slice(0, 60)}"`);
 
+    // How fresh is this lead, in minutes? Drives the "נמשך לפני X דק׳" UI badge.
+    const refDate = claimed.original_post_date || claimed.ingested_at;
+    const minutesAgo = refDate
+      ? Math.max(1, Math.round((Date.now() - new Date(refDate).getTime()) / 60_000))
+      : null;
+
     // Recompute quota so the UI can update its remaining count
     const usedAfter = limit === Infinity ? null : await getClaimedThisMonth(me.username);
     res.json({
-      property: claimed,
+      property:    claimed,
+      minutes_ago: minutesAgo,
+      matched: {
+        city: city && city !== 'all' ? city : null,
+        type: type && type !== 'all' ? type : null,
+      },
+      freshness_minutes: freshnessMinutes,
       quota: {
         plan, used: usedAfter,
         limit:     limit === Infinity ? null : limit,
@@ -233,6 +310,7 @@ module.exports = function createPropertiesRouter() {
       .from('properties')
       .select('city, type')
       .eq('is_claimed', false)
+      .gte('ingested_at', poolTtlIso())  // only count leads still in the rolling window
       .limit(1000);
     if (error) {
       // Schema not migrated → return empty so dropdowns just show "all"
