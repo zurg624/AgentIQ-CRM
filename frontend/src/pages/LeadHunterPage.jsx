@@ -326,9 +326,30 @@ export default function LeadHunterPage({ user = null }) {
     try { setQuota(await api.getClaimQuota()); } catch {}
   }, []);
 
+  const loadFreshCount = useCallback(async () => {
+    try {
+      const result = await api.getFreshLeadsCount();
+      // If we previously had 0 and now have >0, flash a subtle notification
+      // that new leads are ready to claim. Don't auto-claim, just alert.
+      if (result.count > 0) {
+        // Could trigger a subtle toast or banner here if needed
+        console.log(`[hunter] ${result.count} fresh leads ready`);
+      }
+      return result.count;
+    } catch { return 0; }
+  }, []);
+
   useEffect(() => {
     loadMy(); loadFacets(); loadQuota();
-  }, [loadMy, loadFacets, loadQuota]);
+
+    // Poll /fresh-count every 30 seconds so we auto-detect when new leads arrive
+    // (even if the agent didn't trigger a scrape). This gives a real "live" feeling.
+    const pollInterval = setInterval(() => {
+      loadFreshCount();
+    }, 30_000);
+
+    return () => clearInterval(pollInterval);
+  }, [loadMy, loadFacets, loadQuota, loadFreshCount]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const stats = {
@@ -373,8 +394,8 @@ export default function LeadHunterPage({ user = null }) {
         loadQuota();
       } else if (msg.includes('no fresh') || msg.includes('404')) {
         setError(searchedCity
-          ? `מחפשים עבורך לידים חדשים ב-${searchedCity}... נסה שוב בעוד כמה דקות`
-          : 'המאגר ריק כרגע — Apify יזרים לידים חדשים בקרוב, נסה שוב בעוד כמה דקות');
+          ? `מחפשים עבורך לידים חדשים ב-${searchedCity}... אנא נסה שוב בעוד מספר דקות`
+          : 'המאגר מתעדכן כרגע בנכסים חדשים מהשטח, אנא נסה שוב בעוד מספר דקות');
       } else if (msg.includes('claimed') || msg.includes('409')) {
         setError('הליד נחטף ע"י סוכן אחר — נסה שוב');
       } else if (msg.includes('Schema migration')) {

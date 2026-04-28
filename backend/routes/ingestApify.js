@@ -153,7 +153,7 @@ function mapItem(raw) {
     raw.propertyTitle ??
     raw.header        ??
     (cleanText ? cleanText.slice(0, 140) : null) ??
-    'נכס מ-Apify';
+    'נכס חדש';
 
   // Price: structured fields → text extraction (aggressive) → default 0
   let price = parsePrice(
@@ -209,7 +209,7 @@ function mapItem(raw) {
     raw.source   ??
     raw.platform ??
     raw.site     ??
-    'Apify';
+    'Internal Scraper';
 
   // Use the cleaned post body for description so it's UI-ready and human-readable
   const description = cleanText ?? raw.details ?? null;

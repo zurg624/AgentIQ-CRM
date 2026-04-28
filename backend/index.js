@@ -605,10 +605,32 @@ app.use('/api/properties', require('./routes/propertiesApi')());
 //   2. APIFY_START_URLS env — comma-separated list of FB group URLs set on Render
 //   3. Error 400           — user must configure at least one source
 //
+// PRO TIP: Load all Israeli real-estate Facebook groups from FACEBOOK_GROUPS.js:
+//   const fbGroups = require('./FACEBOOK_GROUPS');
+//   POST to /api/apify/run with:
+//     { startUrls: fbGroups.allGroupUrls() }
+//
 // Required Render env vars:
 //   APIFY_TOKEN     – Apify personal access token
 //   APIFY_ACTOR_ID  – Actor ID or "username/actor-name", e.g. "apify/facebook-groups-scraper"
 //   APIFY_START_URLS – comma-separated FB group URLs used as default when none supplied
+// POST /api/apify/run/all-groups — trigger Apify on ALL Israeli FB groups at once (ADMIN-ONLY)
+// Convenience endpoint: loads FACEBOOK_GROUPS.js and queues the entire list.
+app.post('/api/apify/run/all-groups', requireAdmin, async (req, res) => {
+  const fbGroups = require('./FACEBOOK_GROUPS');
+  const allUrls = fbGroups.allGroupUrls();
+  if (!allUrls || allUrls.length === 0) {
+    return res.status(400).json({ error: 'No Facebook groups configured in FACEBOOK_GROUPS.js' });
+  }
+  console.log(`[apify/run/all-groups] queuing ${allUrls.length} Israeli FB groups`);
+  // Forward to the main /apify/run endpoint with all groups
+  req.body = { ...req.body, startUrls: allUrls };
+  // Re-route to the standard handler
+  return app._router.stack
+    .find(r => r.route && r.route.path === '/api/apify/run')
+    .handle(req, res);
+});
+
 app.post('/api/apify/run', requireAdmin, async (req, res) => {
   const token   = process.env.APIFY_TOKEN;
   const actorId = process.env.APIFY_ACTOR_ID;
