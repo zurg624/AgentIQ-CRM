@@ -2,10 +2,37 @@
 
 const express = require('express');
 const { supabase } = require('../pgClient');
+const db = require('../db');
+
+// Per-plan monthly claim quota.  Infinity = unlimited.
+const PLAN_QUOTA = { base: 10, pro: Infinity, elite: Infinity };
+
+// Start of the current calendar month (UTC) — anchor for monthly quota counting.
+function startOfMonthIso() {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+}
+
+// Count how many properties this user has claimed since start-of-month.
+async function getClaimedThisMonth(username) {
+  if (!supabase || !username) return 0;
+  const { count, error } = await supabase
+    .from('properties')
+    .select('id', { count: 'exact', head: true })
+    .eq('claimed_by', username)
+    .gte('claimed_at', startOfMonthIso());
+  if (error) {
+    // Schema not migrated → treat as 0 so we don't block users
+    if (error.message?.includes('column')) return 0;
+    console.warn('[claim/quota] count error:', error.message);
+    return 0;
+  }
+  return count || 0;
+}
 
 // All columns we allow updating.  assigned_to is optional — if the Supabase
 // table was created without it, the PATCH /assign endpoint degrades gracefully.
-const UPDATABLE      = ['title','price','city','area','type','rooms','sqm','url','source','description','assigned_to'];
+const UPDATABLE      = ['title','price','city','area','type','rooms','sqm','url','source','description','assigned_to','status','contact_name','contact_phone'];
 // Columns guaranteed to exist in every schema variant (no assigned_to)
 const UPDATABLE_SAFE = ['title','price','city','area','type','rooms','sqm','url','source','description'];
 
@@ -40,23 +67,81 @@ module.exports = function createPropertiesRouter() {
     res.json({ count: count || 0 });
   });
 
+  // GET /api/properties/quota — current user's monthly claim quota status
+  router.get('/quota', async (req, res) => {
+    const me = userFromAuth(req);
+    if (!me) return res.status(401).json({ error: 'authentication required' });
+    const userRow = db.prepare('SELECT plan FROM users WHERE username = ?').get(me.username);
+    const plan = userRow?.plan || 'base';
+    const limit = PLAN_QUOTA[plan] ?? PLAN_QUOTA.base;
+    const used  = await getClaimedThisMonth(me.username);
+    res.json({
+      plan, used,
+      limit:     limit === Infinity ? null : limit,
+      unlimited: limit === Infinity,
+      remaining: limit === Infinity ? null : Math.max(0, limit - used),
+    });
+  });
+
+  // GET /api/properties/my-claimed — leads claimed by the current user
+  // Renders the cards on the Lead Hunter page.
+  router.get('/my-claimed', async (req, res) => {
+    if (!supabase) return res.json([]);
+    const me = userFromAuth(req);
+    if (!me) return res.status(401).json({ error: 'authentication required' });
+
+    let { data, error } = await supabase
+      .from('properties')
+      .select('*')
+      .eq('claimed_by', me.username)
+      .order('claimed_at', { ascending: false })
+      .limit(100);
+
+    // Schema not migrated yet
+    if (error && error.message?.includes('column')) return res.json([]);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  });
+
   // POST /api/properties/claim — atomically grab the newest unclaimed lead
-  // and assign it to the calling agent.
+  // matching optional { city, type } filters and assign it to the agent.
   //
-  // Returns 200 + { property } on success
-  // Returns 404                 if no fresh leads available
-  // Returns 409                 if a race lost the row to another agent
+  // Returns 200 + { property, quota } on success
+  // Returns 402                       if monthly quota exceeded for plan
+  // Returns 404                       if no fresh leads available
+  // Returns 409                       if a race lost the row to another agent
   router.post('/claim', async (req, res) => {
     if (!supabase) return res.status(503).json({ error: 'Supabase not configured' });
 
     const me = userFromAuth(req) || { username: req.body?.username || 'admin' };
 
-    // 1. Find the freshest unclaimed lead.
+    // Enforce monthly quota by plan BEFORE touching the pool.
+    const userRow = db.prepare('SELECT plan FROM users WHERE username = ?').get(me.username);
+    const plan = userRow?.plan || 'base';
+    const limit = PLAN_QUOTA[plan] ?? PLAN_QUOTA.base;
+    if (limit !== Infinity) {
+      const used = await getClaimedThisMonth(me.username);
+      if (used >= limit) {
+        return res.status(402).json({
+          error: 'ניצלת את המכסה החודשית, שדרג כדי להמשיך לצוד',
+          plan, used, limit,
+        });
+      }
+    }
+
+    // Optional filters from body
+    const { city, type } = req.body || {};
+
+    // 1. Find the freshest unclaimed lead matching filters.
     //    Prefer original_post_date (the FB post time), fall back to ingested_at.
-    let { data: candidates, error: findErr } = await supabase
+    let q = supabase
       .from('properties')
       .select('*')
-      .eq('is_claimed', false)
+      .eq('is_claimed', false);
+    if (city && city !== 'all') q = q.eq('city', city);
+    if (type && type !== 'all') q = q.eq('type', type);
+
+    let { data: candidates, error: findErr } = await q
       .order('original_post_date', { ascending: false, nullsFirst: false })
       .order('ingested_at', { ascending: false })
       .limit(1);
@@ -100,7 +185,63 @@ module.exports = function createPropertiesRouter() {
     }
 
     console.log(`[claim] ${me.username} claimed property ${claimed.id} — "${(claimed.title || '').slice(0, 60)}"`);
-    res.json({ property: claimed });
+
+    // Recompute quota so the UI can update its remaining count
+    const usedAfter = limit === Infinity ? null : await getClaimedThisMonth(me.username);
+    res.json({
+      property: claimed,
+      quota: {
+        plan, used: usedAfter,
+        limit:     limit === Infinity ? null : limit,
+        unlimited: limit === Infinity,
+        remaining: limit === Infinity ? null : Math.max(0, limit - (usedAfter || 0)),
+      },
+    });
+  });
+
+  // POST /api/properties/manual — agent adds a lead manually.
+  // Creates a property already claimed by the current user (skips the pool).
+  // Does NOT count toward monthly quota — manual entry is unlimited.
+  router.post('/manual', async (req, res) => {
+    if (!supabase) return res.status(503).json({ error: 'Supabase not configured' });
+    const me = userFromAuth(req);
+    if (!me) return res.status(401).json({ error: 'authentication required' });
+
+    const allowed = ['title','price','city','area','type','rooms','sqm','url','description','contact_name','contact_phone','status'];
+    const row = { source: 'Manual', is_claimed: true, claimed_by: me.username,
+                  claimed_at: new Date().toISOString(), assigned_to: me.username };
+    for (const k of allowed) if (k in req.body) row[k] = req.body[k];
+    if (!row.title) row.title = row.contact_name ? `ליד ידני — ${row.contact_name}` : 'ליד ידני';
+
+    let { data, error } = await supabase.from('properties').insert(row).select().single();
+    // Drop unknown columns and retry — some Supabase schemas are missing newer cols
+    while (error && error.message?.includes('column')) {
+      const m = error.message.match(/column "([^"]+)"/);
+      if (!m || !(m[1] in row)) break;
+      delete row[m[1]];
+      ({ data, error } = await supabase.from('properties').insert(row).select().single());
+    }
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  // GET /api/properties/facets — distinct cities + types currently in the pool.
+  // Used to populate the filter dropdowns on the Lead Hunter page.
+  router.get('/facets', async (req, res) => {
+    if (!supabase) return res.json({ cities: [], types: [] });
+    const { data, error } = await supabase
+      .from('properties')
+      .select('city, type')
+      .eq('is_claimed', false)
+      .limit(1000);
+    if (error) {
+      // Schema not migrated → return empty so dropdowns just show "all"
+      if (error.message?.includes('column')) return res.json({ cities: [], types: [] });
+      return res.status(500).json({ error: error.message });
+    }
+    const cities = [...new Set((data || []).map(r => r.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
+    const types  = [...new Set((data || []).map(r => r.type).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
+    res.json({ cities, types });
   });
 
   // GET /api/properties — list newest-first, default 200 rows

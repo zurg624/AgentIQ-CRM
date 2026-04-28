@@ -24,6 +24,15 @@ ALTER TABLE properties ADD COLUMN IF NOT EXISTS is_claimed         BOOLEAN     D
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS claimed_by         TEXT;
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS claimed_at         TIMESTAMPTZ;
 
+-- Optional: status tracking on claimed leads + contact info extracted from posts
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS status              TEXT DEFAULT 'New';
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS contact_name        TEXT;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS contact_phone       TEXT;
+
+-- Quota lookup index — counting a user's claims this month must be instant
+CREATE INDEX IF NOT EXISTS properties_claimed_by_at
+  ON properties (claimed_by, claimed_at DESC);
+
 -- 3. Make sure created_at exists (Supabase tables created via the dashboard
 --    sometimes use this name; the backend also writes ingested_at).
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_at         TIMESTAMPTZ DEFAULT NOW();

@@ -831,7 +831,7 @@ app.post('/api/auth/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
   if (!user) return res.status(401).json({ error: 'שם משתמש או סיסמה שגויים' });
   const token = Buffer.from(`${user.username}:${user.role}:${Date.now()}`).toString('base64');
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role, display_name: user.display_name } });
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role, display_name: user.display_name, plan: user.plan || 'base' } });
 });
 
 app.get('/api/auth/me', (req, res) => {
@@ -839,7 +839,7 @@ app.get('/api/auth/me', (req, res) => {
   if (!auth) return res.status(401).json({ error: 'Not authenticated' });
   try {
     const [username] = Buffer.from(auth, 'base64').toString().split(':');
-    const user = db.prepare('SELECT id, username, role, display_name FROM users WHERE username = ?').get(username);
+    const user = db.prepare('SELECT id, username, role, display_name, plan FROM users WHERE username = ?').get(username);
     if (!user) return res.status(401).json({ error: 'Invalid token' });
     res.json(user);
   } catch { res.status(401).json({ error: 'Invalid token' }); }

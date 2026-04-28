@@ -54,9 +54,13 @@ export const api = {
   deleteProperty:       (id)    => request(`/properties/${id}`,       { method: 'DELETE' }),
   assignPropertyAgent:  (id, n) => request(`/properties/${id}/assign`,{ method: 'PATCH',  body: JSON.stringify({ assigned_to: n }) }),
 
-  // Hunt Mode — fresh lead counter + atomic claim
+  // Hunt Mode — fresh lead counter + atomic claim + quota + facets
   getFreshLeadsCount:   ()      => request('/properties/fresh-count'),
-  claimNextLead:        ()      => request('/properties/claim',       { method: 'POST' }),
+  claimNextLead:        (filters = {}) => request('/properties/claim',{ method: 'POST', body: JSON.stringify(filters) }),
+  getMyClaimed:         ()      => request('/properties/my-claimed'),
+  createManualLead:     (body)  => request('/properties/manual',      { method: 'POST', body: JSON.stringify(body) }),
+  getClaimQuota:        ()      => request('/properties/quota'),
+  getClaimFacets:       ()      => request('/properties/facets'),
 
   getNotifications:     ()      => request('/notifications'),
   markNotifRead:        (id)    => request(`/notifications/${id}/read`, { method: 'PATCH' }),

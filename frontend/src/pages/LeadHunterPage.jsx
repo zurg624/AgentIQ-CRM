@@ -1,64 +1,228 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function fmtPrice(n) {
   if (!n) return '—';
-  if (n >= 1_000_000) return `₪${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 2)}M`;
-  if (n >= 1_000)     return `₪${(n / 1_000).toFixed(0)}K`;
-  return `₪${n}`;
+  return `₪${Number(n).toLocaleString('he-IL')}`;
 }
 
-function fmtMins(mins) {
-  if (!mins) return '—';
-  if (mins < 60)   return `לפני ${mins} דק'`;
-  if (mins < 1440) return `לפני ${Math.round(mins / 60)} שע'`;
-  return `לפני ${Math.round(mins / 1440)} ימים`;
+function truncate(s, n = 120) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-function scoreColor(s) {
-  if (s >= 90) return '#22c55e';
-  if (s >= 80) return '#eab308';
-  if (s >= 70) return '#f97316';
-  return '#94a3b8';
-}
-function scoreBg(s) {
-  if (s >= 90) return 'rgba(34,197,94,0.12)';
-  if (s >= 80) return 'rgba(234,179,8,0.12)';
-  if (s >= 70) return 'rgba(249,115,22,0.12)';
-  return 'rgba(148,163,184,0.1)';
+// Type label map (Hebrew → English-ish for filter values).
+// We display Hebrew everywhere; values in the dropdown match what the scraper stores.
+const TYPE_OPTIONS = [
+  { value: 'all',     label: 'הכל' },
+  { value: 'מכירה',   label: 'מכירה' },
+  { value: 'השכרה',   label: 'השכרה' },
+];
+
+const STATUS_PILLS = {
+  'New':               { label: 'חדש',     bg: 'rgba(59,130,246,0.15)', color: '#60a5fa' },
+  'Contacted':         { label: 'בטיפול',  bg: 'rgba(245,158,11,0.18)', color: '#fbbf24' },
+  'Meeting Scheduled': { label: 'פגישה',   bg: 'rgba(139,92,246,0.18)', color: '#c4b5fd' },
+  'Closed':            { label: 'סגור',    bg: 'rgba(34,197,94,0.18)',  color: '#4ade80' },
+};
+
+// Try to extract a phone number from the description if it's not a top-level field.
+function extractPhone(p) {
+  if (p.contact_phone) return p.contact_phone;
+  const m = (p.description || '').match(/(0\d[-\s]?\d{3}[-\s]?\d{4}|0\d{9})/);
+  return m ? m[0].replace(/[\s-]/g, '') : null;
 }
 
-function truncate(str, n = 60) {
-  if (!str) return '—';
-  return str.length > n ? str.slice(0, n) + '…' : str;
+// Display name: explicit contact_name → first 40 chars of title → fallback id
+function displayName(p) {
+  if (p.contact_name) return p.contact_name;
+  if (p.title)        return p.title.split(/[—|·,\n]/)[0].trim().slice(0, 40);
+  return `ליד #${p.id}`;
 }
 
-function Avatar({ name, size = 36 }) {
-  const letter = (name || '?')[0].toUpperCase();
+// ── Manual Lead Modal ────────────────────────────────────────────────────────
+function ManualLeadModal({ onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: '', phone: '', city: '', type: 'מכירה', rooms: '', price: '', description: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const save = async () => {
+    if (!form.name.trim()) { setErr('שם הוא שדה חובה'); return; }
+    setSaving(true); setErr('');
+    try {
+      const created = await api.createManualLead({
+        title:         form.name.trim(),
+        contact_name:  form.name.trim(),
+        contact_phone: form.phone.trim() || null,
+        city:          form.city.trim() || null,
+        type:          form.type,
+        rooms:         form.rooms ? Number(form.rooms) : null,
+        price:         form.price ? Number(form.price) : null,
+        description:   form.description.trim() || null,
+        status:        'New',
+      });
+      onSaved(created); onClose();
+    } catch (e) { setErr(e.message || 'שגיאה'); }
+    finally { setSaving(false); }
+  };
+
   return (
-    <div className="rounded-full flex items-center justify-center text-white font-bold flex-shrink-0"
-      style={{ width: size, height: size, fontSize: size * 0.38, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
-      {letter}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="w-full max-w-md rounded-2xl p-6 space-y-3"
+        style={{ background: '#0f1629', border: '1px solid rgba(139,92,246,0.3)' }}>
+        <div className="flex items-center justify-between">
+          <button onClick={onClose} className="text-sm px-3 py-1 rounded-lg"
+            style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}>✕</button>
+          <h3 className="text-base font-bold text-white">+ הוספת ליד ידני</h3>
+        </div>
+
+        {[
+          { k: 'name',    l: 'שם הליד *', ph: 'יוסי כהן' },
+          { k: 'phone',   l: 'טלפון',     ph: '052-1234567' },
+          { k: 'city',    l: 'עיר',       ph: 'תל אביב' },
+        ].map(({ k, l, ph }) => (
+          <div key={k}>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>{l}</label>
+            <input value={form[k]} onChange={e => set(k, e.target.value)} placeholder={ph}
+              className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right" />
+          </div>
+        ))}
+
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>סוג</label>
+            <select value={form.type} onChange={e => set('type', e.target.value)}
+              className="dark-input w-full px-2 py-2 text-sm rounded-xl">
+              <option>מכירה</option>
+              <option>השכרה</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>חדרים</label>
+            <input type="number" value={form.rooms} onChange={e => set('rooms', e.target.value)} placeholder="4"
+              className="dark-input w-full px-2 py-2 text-sm rounded-xl text-right" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>מחיר ₪</label>
+            <input type="number" value={form.price} onChange={e => set('price', e.target.value)} placeholder="2200000"
+              className="dark-input w-full px-2 py-2 text-sm rounded-xl text-right" />
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>תיאור</label>
+          <textarea value={form.description} onChange={e => set('description', e.target.value)}
+            rows={3} placeholder="דירת 4 חד' למכירה, קומה 3, מרפסת שמש..."
+            className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right resize-none" />
+        </div>
+
+        {err && <div className="text-xs text-red-400 text-right">⚠️ {err}</div>}
+
+        <button onClick={save} disabled={saving}
+          className="w-full text-sm font-bold py-2.5 rounded-xl disabled:opacity-50"
+          style={{ background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: 'white' }}>
+          {saving ? 'שומר...' : '💾 שמור ליד'}
+        </button>
+      </div>
     </div>
   );
 }
 
-// ── Edit Modal ────────────────────────────────────────────────────────────────
+// ── Lead Card (matches screenshot) ──────────────────────────────────────────
+function LeadCard({ lead, onChangeStatus, onEdit, onDelete, onConvertCRM }) {
+  const status = lead.status || 'New';
+  const pill = STATUS_PILLS[status] || STATUS_PILLS.New;
+  const phone = extractPhone(lead);
+  const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
+  const waPhone = phoneDigits.startsWith('0') ? '972' + phoneDigits.slice(1) : phoneDigits;
 
+  // Build the meta line: "📍 city · type · rooms חד' · ₪price"
+  const metaParts = [];
+  if (lead.city)            metaParts.push(`📍 ${lead.city}`);
+  if (lead.type)            metaParts.push(lead.type);
+  if (lead.rooms)           metaParts.push(`${lead.rooms} חד'`);
+  if (lead.price > 0)       metaParts.push(fmtPrice(lead.price));
+
+  return (
+    <div className="rounded-2xl p-4 space-y-3"
+      style={{ background: '#131c33', border: '1px solid rgba(255,255,255,0.06)' }}>
+
+      {/* Top row: status pill (left) ↔ name + meta (right) */}
+      <div className="flex items-start justify-between gap-3">
+        <select value={status} onChange={e => onChangeStatus(lead.id, e.target.value)}
+          className="text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer border-0 outline-none flex-shrink-0"
+          style={{ background: pill.bg, color: pill.color }}>
+          {Object.entries(STATUS_PILLS).map(([k, v]) => (
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+
+        <div className="flex-1 text-right min-w-0">
+          <h3 className="text-base font-bold text-white truncate">{displayName(lead)}</h3>
+          {metaParts.length > 0 && (
+            <div className="text-xs mt-1" style={{ color: '#94a3b8' }}>
+              {metaParts.join(' · ')}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Description */}
+      {lead.description && (
+        <p className="text-xs text-right leading-relaxed" style={{ color: '#cbd5e1' }}>
+          {truncate(lead.description, 140)}
+        </p>
+      )}
+
+      {/* Action row — RTL means first item appears rightmost */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {phone && (
+          <a href={`tel:${phone}`}
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+            style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80', textDecoration: 'none' }}>
+            <span>📞</span><span dir="ltr">{phone}</span>
+          </a>
+        )}
+        {phone && (
+          <a href={`https://wa.me/${waPhone}`} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+            style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399', textDecoration: 'none' }}>
+            💬 WA
+          </a>
+        )}
+        <button onClick={() => onConvertCRM(lead)}
+          className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+          style={{ background: 'rgba(139,92,246,0.22)', color: '#c4b5fd' }}>
+          📊 CRM
+        </button>
+        <button onClick={() => onEdit(lead)}
+          className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+          style={{ background: 'rgba(59,130,246,0.18)', color: '#60a5fa' }}>
+          ✏️ עריכה
+        </button>
+        <button onClick={() => onDelete(lead.id)}
+          className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+          style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
+          🗑 מחק
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Edit Modal (slim) ────────────────────────────────────────────────────────
 function EditModal({ property, onSave, onClose }) {
   const [form, setForm] = useState({
-    title:       property.title       || '',
-    price:       property.price       || '',
-    city:        property.city        || '',
-    area:        property.area        || '',
-    type:        property.type        || '',
-    rooms:       property.rooms       || '',
-    sqm:         property.sqm         || '',
-    url:         property.url         || '',
-    source:      property.source      || '',
-    description: property.description || '',
+    title: property.title || '', price: property.price || '',
+    city: property.city || '', type: property.type || '',
+    rooms: property.rooms || '', description: property.description || '',
+    status: property.status || 'New',
   });
   const [saving, setSaving] = useState(false);
 
@@ -67,917 +231,344 @@ function EditModal({ property, onSave, onClose }) {
     try {
       await onSave(property.id, { ...form, price: Number(form.price) || 0 });
       onClose();
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
-
-  const field = (key, label, type = 'text') => (
-    <div className="flex flex-col gap-1">
-      <label className="text-xs font-semibold text-right" style={{ color: '#94a3b8' }}>{label}</label>
-      {key === 'description' ? (
-        <textarea
-          value={form[key]}
-          onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
-          rows={3}
-          className="w-full rounded-xl px-3 py-2 text-sm text-right"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', resize: 'vertical' }}
-        />
-      ) : (
-        <input
-          type={type}
-          value={form[key]}
-          onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
-          className="w-full rounded-xl px-3 py-2 text-sm text-right"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
-        />
-      )}
-    </div>
-  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="w-full max-w-lg rounded-2xl p-6 space-y-4 overflow-y-auto max-h-[90vh]"
+      <div className="w-full max-w-md rounded-2xl p-6 space-y-3"
         style={{ background: '#0f1629', border: '1px solid rgba(255,255,255,0.1)' }}>
         <div className="flex items-center justify-between">
-          <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-lg"
-            style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}>✕ סגור</button>
-          <h3 className="text-sm font-bold text-white">עריכת נכס</h3>
+          <button onClick={onClose} className="text-sm px-3 py-1 rounded-lg"
+            style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}>✕</button>
+          <h3 className="text-base font-bold text-white">עריכת ליד</h3>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {field('title',  'כותרת')}
-          {field('price',  'מחיר (₪)', 'number')}
-          {field('city',   'עיר')}
-          {field('area',   'שכונה')}
-          {field('type',   'סוג נכס')}
-          {field('rooms',  'חדרים', 'number')}
-          {field('sqm',    'מ"ר', 'number')}
-          {field('url',    'קישור למקור')}
-          {field('source', 'מקור')}
+        {[
+          ['title', 'כותרת / שם'],
+          ['city',  'עיר'],
+          ['type',  'סוג'],
+        ].map(([k, l]) => (
+          <div key={k}>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>{l}</label>
+            <input value={form[k]} onChange={e => setForm(p => ({ ...p, [k]: e.target.value }))}
+              className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right" />
+          </div>
+        ))}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>חדרים</label>
+            <input type="number" value={form.rooms} onChange={e => setForm(p => ({ ...p, rooms: e.target.value }))}
+              className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>מחיר ₪</label>
+            <input type="number" value={form.price} onChange={e => setForm(p => ({ ...p, price: e.target.value }))}
+              className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right" />
+          </div>
         </div>
-        {field('description', 'תיאור מלא')}
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>תיאור</label>
+          <textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
+            rows={3} className="dark-input w-full px-3 py-2 text-sm rounded-xl text-right resize-none" />
+        </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full py-2.5 rounded-xl text-sm font-bold disabled:opacity-60 transition-all"
+        <button onClick={handleSave} disabled={saving}
+          className="w-full text-sm font-bold py-2.5 rounded-xl disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', color: 'white' }}>
-          {saving ? 'שומר...' : '💾 שמור שינויים'}
+          {saving ? 'שומר...' : '💾 שמור'}
         </button>
       </div>
     </div>
   );
 }
 
-// ── Properties Table ──────────────────────────────────────────────────────────
+// ── Main Page ────────────────────────────────────────────────────────────────
+export default function LeadHunterPage({ user = null }) {
+  // Data state
+  const [myLeads,    setMyLeads]    = useState([]);
+  const [loadingMy,  setLoadingMy]  = useState(true);
+  const [facets,     setFacets]     = useState({ cities: [], types: [] });
+  const [quota,      setQuota]      = useState(null);
 
-function PropertiesTable({ properties, agents, onEdit, onDelete, onAssign, onWhatsapp, onConvertCRM, isAdmin, loading, convertingId }) {
-  if (loading) {
-    return (
-      <div className="card rounded-2xl p-10 flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" />
-        <p className="text-xs" style={{ color: '#475569' }}>טוען נכסים...</p>
-      </div>
-    );
-  }
-  if (properties.length === 0) {
-    return (
-      <div className="card rounded-2xl p-12 flex flex-col items-center gap-3 text-center">
-        <div className="text-4xl">🎯</div>
-        <p className="text-sm font-semibold text-white">אין נכסים עדיין</p>
-        <p className="text-xs" style={{ color: '#475569' }}>לחץ על "סרוק לידים חדשים" כדי להתחיל</p>
-      </div>
-    );
-  }
+  // Filter state
+  const [filterCity, setFilterCity] = useState('all');
+  const [filterType, setFilterType] = useState('all');
 
-  return (
-    <div className="card rounded-2xl overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.03)' }}>
-              {['כותרת','תקציר','מחיר','עיר','חד\'','מקור', ...(isAdmin ? ['סוכן'] : []), 'פעולות'].map(h => (
-                <th key={h} className="px-3 py-2.5 text-right font-semibold whitespace-nowrap"
-                  style={{ color: '#64748b' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {properties.map((p, i) => (
-              <tr key={p.id}
-                style={{
-                  borderBottom: '1px solid rgba(255,255,255,0.04)',
-                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.07)'}
-                onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)'}>
+  // UI state
+  const [hunting,    setHunting]    = useState(false);
+  const [flash,      setFlash]      = useState(''); // ✅ banner — "ליד חדש: ..."
+  const [error,      setError]      = useState('');
+  const [showManual, setShowManual] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [toast,      setToast]      = useState('');
 
-                {/* Title */}
-                <td className="px-3 py-2.5 text-right max-w-[200px]">
-                  <span className="font-medium text-white" title={p.title}>{truncate(p.title, 50)}</span>
-                </td>
-
-                {/* Description preview */}
-                <td className="px-3 py-2.5 text-right max-w-[260px]">
-                  <span style={{ color: '#64748b', fontSize: 11, lineHeight: 1.45 }} title={p.description}>
-                    {truncate(p.description, 90)}
-                  </span>
-                </td>
-
-                {/* Price */}
-                <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                  <span className="font-bold" style={{ color: p.price > 0 ? '#34d399' : '#475569' }}>
-                    {fmtPrice(p.price)}
-                  </span>
-                </td>
-
-                {/* City */}
-                <td className="px-3 py-2.5 text-right">
-                  <span style={{ color: '#94a3b8' }}>{p.city || '—'}</span>
-                </td>
-
-                {/* Rooms */}
-                <td className="px-3 py-2.5 text-right" style={{ color: '#94a3b8' }}>
-                  {p.rooms || '—'}
-                </td>
-
-                {/* Source */}
-                <td className="px-3 py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                    style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24' }}>
-                    {p.source || 'Apify'}
-                  </span>
-                </td>
-
-                {/* Agent dropdown — admin only */}
-                {isAdmin && (
-                  <td className="px-3 py-2.5 text-right">
-                    <select
-                      value={p.assigned_to || ''}
-                      onChange={e => onAssign(p.id, e.target.value || null)}
-                      className="text-[11px] rounded-lg px-2 py-1 text-right"
-                      style={{
-                        background: 'rgba(255,255,255,0.05)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: p.assigned_to ? '#a5b4fc' : '#475569',
-                        minWidth: 80,
-                      }}>
-                      <option value="">— שייך —</option>
-                      {agents.map(a => (
-                        <option key={a.id} value={a.name}>{a.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                )}
-
-                {/* Actions */}
-                <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                  <div className="flex items-center justify-end gap-1.5">
-                    {/* Convert to CRM lead */}
-                    <button onClick={() => onConvertCRM(p)} title="המר לליד CRM"
-                      disabled={convertingId === p.id}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all disabled:opacity-50"
-                      style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
-                      {convertingId === p.id ? <span className="w-3 h-3 border border-indigo-400/40 border-t-indigo-300 rounded-full animate-spin" /> : '➕'}
-                    </button>
-                    {/* WhatsApp */}
-                    <button onClick={() => onWhatsapp(p)} title="שלח בוואטסאפ"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
-                      style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80' }}>
-                      💬
-                    </button>
-                    {/* Facebook / source link */}
-                    {p.url && (
-                      <a href={p.url} target="_blank" rel="noopener noreferrer"
-                        title="פתח פוסט מקורי"
-                        className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
-                        style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>
-                        🔗
-                      </a>
-                    )}
-                    {/* Edit */}
-                    <button onClick={() => onEdit(p)} title="עריכה"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
-                      style={{ background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }}>
-                      ✏️
-                    </button>
-                    {/* Delete */}
-                    <button onClick={() => onDelete(p.id)} title="מחיקה"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
-                      style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171' }}>
-                      🗑️
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ── Match tab components ──────────────────────────────────────────────────────
-
-function MatchCard({ match, isSent, onSend, idx }) {
-  const { lead, property, score } = match;
-  const col = scoreColor(score);
-  const bg  = scoreBg(score);
-
-  return (
-    <div className="card rounded-2xl p-4 space-y-3"
-      style={{ animation: `fadeSlideIn 0.3s ease both`, animationDelay: `${idx * 0.07}s` }}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xl font-black" style={{ color: col }}>{score}%</span>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: bg, color: col }}>התאמה</span>
-        </div>
-        <span className="text-xs font-semibold text-white">{lead.name}</span>
-      </div>
-      <div className="text-sm font-bold text-white text-right leading-snug">{property.title}</div>
-      <div className="w-full h-1 rounded-full" style={{ background: 'rgba(255,255,255,0.07)' }}>
-        <div className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${score}%`, background: `linear-gradient(90deg, ${col}80, ${col})` }} />
-      </div>
-      <div className="flex items-center justify-between">
-        <button onClick={() => onSend(match)} disabled={isSent}
-          className="text-xs font-bold px-3 py-1.5 rounded-xl transition-all disabled:cursor-default"
-          style={isSent
-            ? { background: 'rgba(255,255,255,0.06)', color: '#475569' }
-            : { background: 'linear-gradient(135deg,#ef4444,#f97316)', color: 'white', boxShadow: '0 0 12px rgba(239,68,68,0.3)' }
-          }>
-          {isSent ? '✓ נשלח' : '🔥 שלח עכשיו'}
-        </button>
-        <div className="text-right">
-          <div className="text-xs font-bold" style={{ color: '#e2e8f0' }}>{fmtPrice(property.price)}</div>
-          <div className="text-[10px]" style={{ color: '#475569' }}>{fmtMins(property.mins)}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ProfileRow({ profile }) {
-  const { lead, match_count, best_property, best_score } = profile;
-  const details = [best_property?.type, best_property?.area, best_property?.price ? fmtPrice(best_property.price) : null]
-    .filter(Boolean).join(' | ');
-  return (
-    <div className="flex items-center gap-3 py-2.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-      <div className="text-center flex-shrink-0 w-10">
-        <div className="text-lg font-black" style={{ color: match_count >= 3 ? '#22c55e' : '#60a5fa' }}>{match_count}</div>
-        <div className="text-[9px] leading-tight" style={{ color: '#475569' }}>התאמות</div>
-      </div>
-      <Avatar name={lead.name} size={34} />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold text-white truncate">{lead.name}</div>
-        <div className="text-[10px] truncate mt-0.5" style={{ color: '#94a3b8' }}>{details}</div>
-      </div>
-      <div className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
-        style={{ background: scoreBg(best_score), color: scoreColor(best_score) }}>{best_score}%</div>
-    </div>
-  );
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
-
-export default function LeadHunterPage({ agents = [], user = null }) {
-  const isAdmin = user?.role === 'admin';
-  const [tab, setTab]             = useState('facebook');
-
-  // Facebook tab state
-  const [properties,  setProperties]  = useState([]);
-  const [propLoading, setPropLoading] = useState(false);
-  const [scanning,    setScanning]    = useState(false);
-  const [scanMsg,     setScanMsg]     = useState('');
-  const [scanUrl,     setScanUrl]     = useState('');   // optional FB group URL
-  const [editTarget,  setEditTarget]  = useState(null);
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [convertingId,  setConvertingId]  = useState(null);
-  const [toast,       setToast]       = useState('');
-
-  // Hunt Mode
-  const [freshCount,  setFreshCount]  = useState(0);
-  const [hunting,     setHunting]     = useState(false);
-  const [huntedLead,  setHuntedLead]  = useState(null); // the just-claimed property
-  const [huntError,   setHuntError]   = useState('');
-
-  // Match tab state
-  const [matches,   setMatches]   = useState([]);
-  const [profiles,  setProfiles]  = useState([]);
-  const [stats,     setStats]     = useState(null);
-  const [matchScan, setMatchScan] = useState(false);
-  const [sent,      setSent]      = useState(new Set());
-  const [matchLoaded, setMatchLoaded] = useState(false);
-
-  const showToast = (msg, ms = 3500) => {
+  const showToast = (msg, ms = 3000) => {
     setToast(msg);
     setTimeout(() => setToast(''), ms);
   };
 
-  // Load properties (Facebook tab)
-  const loadProperties = useCallback(async () => {
-    setPropLoading(true);
-    try {
-      const data = await api.getProperties();
-      setProperties(data);
-    } catch (err) {
-      showToast(`❌ שגיאה בטעינה: ${err.message}`, 4000);
-    } finally {
-      setPropLoading(false);
-    }
+  // ── Loaders ────────────────────────────────────────────────────────────────
+  const loadMy = useCallback(async () => {
+    setLoadingMy(true);
+    try { setMyLeads(await api.getMyClaimed()); }
+    catch (e) { console.error('[hunter] my-claimed:', e); }
+    finally { setLoadingMy(false); }
   }, []);
 
-  useEffect(() => { loadProperties(); }, [loadProperties]);
+  const loadFacets = useCallback(async () => {
+    try { setFacets(await api.getClaimFacets()); } catch {}
+  }, []);
 
-  // Fresh-leads counter — refreshes on mount and every 60s
-  const loadFreshCount = useCallback(async () => {
-    try {
-      const r = await api.getFreshLeadsCount();
-      setFreshCount(r.count || 0);
-    } catch { /* silent */ }
+  const loadQuota = useCallback(async () => {
+    try { setQuota(await api.getClaimQuota()); } catch {}
   }, []);
 
   useEffect(() => {
-    loadFreshCount();
-    const t = setInterval(loadFreshCount, 60_000);
-    return () => clearInterval(t);
-  }, [loadFreshCount]);
+    loadMy(); loadFacets(); loadQuota();
+  }, [loadMy, loadFacets, loadQuota]);
 
-  // Hunt: atomically claim the freshest unclaimed lead
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const stats = {
+    total:  myLeads.length,
+    active: myLeads.filter(l => l.status === 'Contacted' || l.status === 'Meeting Scheduled').length,
+    closed: myLeads.filter(l => l.status === 'Closed').length,
+  };
+
+  const quotaExceeded = quota && !quota.unlimited && quota.remaining === 0;
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleHunt = async () => {
-    setHunting(true);
-    setHuntError('');
+    setError(''); setHunting(true);
     try {
-      const { property } = await api.claimNextLead();
-      setHuntedLead(property);
-      // Optimistically update local list + count
-      setProperties(prev => prev.map(p => p.id === property.id
-        ? { ...p, is_claimed: true, claimed_by: user?.username, assigned_to: user?.username }
-        : p));
-      setFreshCount(c => Math.max(0, c - 1));
+      const filters = {
+        city: filterCity === 'all' ? undefined : filterCity,
+        type: filterType === 'all' ? undefined : filterType,
+      };
+      const r = await api.claimNextLead(filters);
+      const lead = r.property;
+      setMyLeads(prev => [lead, ...prev.filter(p => p.id !== lead.id)]);
+      if (r.quota) setQuota(r.quota);
+      const where = lead.city ? ` מ${lead.city}` : '';
+      setFlash(`ליד חדש: ${displayName(lead)}${where}`);
+      setTimeout(() => setFlash(''), 5000);
+      loadFacets();
     } catch (err) {
       const msg = err.message || '';
-      if (msg.includes('no fresh') || msg.includes('404')) {
-        setHuntError('המאגר ריק — לחץ "סרוק" להבאת לידים חדשים');
+      if (msg.includes('quota') || msg.includes('מכסה')) {
+        setError('ניצלת את המכסה החודשית, שדרג כדי להמשיך לצוד');
+        loadQuota();
+      } else if (msg.includes('no fresh') || msg.includes('404')) {
+        setError('אין לידים מתאימים במאגר — נסה סינון אחר או רענן מאוחר יותר');
       } else if (msg.includes('claimed') || msg.includes('409')) {
-        setHuntError('הליד נחטף ע"י סוכן אחר — נסה שוב');
-        loadFreshCount();
+        setError('הליד נחטף ע"י סוכן אחר — נסה שוב');
       } else if (msg.includes('Schema migration')) {
-        setHuntError('צריך להריץ SUPABASE_SCHEMA.sql ב-Supabase (ראה לוגים)');
+        setError('צריך להריץ SUPABASE_SCHEMA.sql ב-Supabase');
       } else {
-        setHuntError(msg);
+        setError(msg);
       }
     } finally {
       setHunting(false);
     }
   };
 
-  // Format relative time in Hebrew (for the hunted lead card)
-  const fmtRelative = (iso) => {
-    if (!iso) return null;
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return null;
-    const mins = Math.round((Date.now() - d.getTime()) / 60_000);
-    if (mins < 1)    return 'עכשיו';
-    if (mins < 60)   return `לפני ${mins} דק'`;
-    if (mins < 1440) return `לפני ${Math.round(mins / 60)} שע'`;
-    return `לפני ${Math.round(mins / 1440)} ימים`;
+  const handleChangeStatus = async (id, status) => {
+    setMyLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l));
+    try { await api.updateProperty(id, { status }); }
+    catch { /* property table may not have status column — that's fine, UI keeps it */ }
   };
 
-  // Load matches (Match tab)
-  const loadMatches = async (anim = false) => {
-    setMatchScan(true);
-    if (anim) { setMatches([]); setProfiles([]); }
-    try {
-      const data = await api.getMatches();
-      setMatches(data.matches  || []);
-      setProfiles(data.profiles || []);
-      setStats(data.stats || null);
-      setMatchLoaded(true);
-    } catch (err) {
-      setMatchLoaded(true);
-    } finally {
-      setMatchScan(false);
-    }
-  };
-
-  useEffect(() => { if (tab === 'matches') loadMatches(); }, [tab]);
-
-  // Trigger Apify scan
-  // If scanUrl is filled → send it as startUrls so the Actor knows which FB group to scrape.
-  // If empty            → the backend reads APIFY_START_URLS env var as the default.
-  const handleScan = async () => {
-    setScanning(true);
-    setScanMsg('');
-    try {
-      const body = scanUrl.trim()
-        ? { startUrls: [{ url: scanUrl.trim() }] }
-        : {};
-      const result = await api.runApifyScan(body);
-      setScanMsg(`✅ הסריקה הושקה (Run ID: ${result.runId?.slice(0,8)}…). הנתונים יופיעו בקרוב — לחץ "רענן".`);
-    } catch (err) {
-      setScanMsg(`❌ ${err.message}`);
-    } finally {
-      setScanning(false);
-    }
-  };
-
-  // Edit save
   const handleEditSave = async (id, updates) => {
     const updated = await api.updateProperty(id, updates);
-    setProperties(prev => prev.map(p => p.id === id ? { ...p, ...updated } : p));
-    showToast('✅ הנכס עודכן בהצלחה');
+    setMyLeads(prev => prev.map(l => l.id === id ? { ...l, ...updated, ...updates } : l));
+    showToast('✅ הליד עודכן');
   };
 
-  // Delete
   const handleDelete = async (id) => {
-    if (deleteConfirm !== id) { setDeleteConfirm(id); setTimeout(() => setDeleteConfirm(null), 3000); return; }
-    setDeleteConfirm(null);
-    await api.deleteProperty(id);
-    setProperties(prev => prev.filter(p => p.id !== id));
-    showToast('🗑️ הנכס נמחק');
-  };
-
-  // Assign agent
-  const handleAssign = async (id, agentName) => {
-    await api.assignPropertyAgent(id, agentName || null);
-    setProperties(prev => prev.map(p => p.id === id ? { ...p, assigned_to: agentName || null } : p));
-  };
-
-  // Build a human-readable summary of a property (for WhatsApp + CRM message)
-  const propertySummary = (p) => {
-    const parts = [];
-    if (p.title) parts.push(`🏠 ${p.title}`);
-    if (p.price > 0) parts.push(`💰 ${fmtPrice(p.price)}`);
-    if (p.city)  parts.push(`📍 ${p.city}${p.area ? ' / ' + p.area : ''}`);
-    if (p.rooms) parts.push(`🚪 ${p.rooms} חדרים`);
-    if (p.sqm)   parts.push(`📐 ${p.sqm} מ"ר`);
-    if (p.description) parts.push(`\n${p.description.slice(0, 350)}`);
-    if (p.url)   parts.push(`\n🔗 ${p.url}`);
-    return parts.join('\n');
-  };
-
-  // WhatsApp share — picker (no number) so user picks the recipient inside WA
-  const handleWhatsapp = (p) => {
-    const text = encodeURIComponent(propertySummary(p));
-    window.open(`https://wa.me/?text=${text}`, '_blank');
-  };
-
-  // Convert a scraped property into a real CRM lead
-  const handleConvertCRM = async (p) => {
-    if (convertingId) return;
-    setConvertingId(p.id);
+    if (!confirm('למחוק את הליד?')) return;
     try {
-      const lead = await api.createLead({
-        name:    p.title?.slice(0, 80) || `נכס מ-Apify ${p.id}`,
-        phone:   null,
-        source:  `Facebook · ${p.source || 'Apify'}`,
-        message: propertySummary(p),
+      await api.deleteProperty(id);
+      setMyLeads(prev => prev.filter(l => l.id !== id));
+      loadQuota();
+      showToast('🗑️ נמחק');
+    } catch (e) { showToast('❌ ' + e.message); }
+  };
+
+  const handleConvertCRM = async (lead) => {
+    try {
+      const phone = extractPhone(lead);
+      const message = [
+        lead.city && `📍 ${lead.city}`,
+        lead.type && `(${lead.type})`,
+        lead.rooms && `${lead.rooms} חד'`,
+        lead.price && fmtPrice(lead.price),
+        lead.description && `\n${lead.description}`,
+      ].filter(Boolean).join(' ');
+      await api.createLead({
+        name:    displayName(lead),
+        phone:   phone || null,
+        source:  `Hunter · ${lead.source || 'Pool'}`,
+        message,
         owner_username: user?.username || null,
       });
-      showToast(`✅ הליד "${lead.name}" נוסף ל-CRM`);
-    } catch (err) {
-      showToast(`❌ שגיאה בהמרה: ${err.message}`, 4000);
-    } finally {
-      setConvertingId(null);
-    }
+      showToast('✅ הועבר ל-CRM');
+    } catch (e) { showToast('❌ ' + e.message); }
   };
 
-  // Send match via WhatsApp
-  const handleSend = (match) => {
-    setSent(prev => new Set([...prev, match.id]));
-    const msg = `🏠 נכס מתאים עבורך!\n${match.property.title}\n${fmtPrice(match.property.price)}\nהתאמה: ${match.score}%`;
-    showToast(`✅ נשלח ל-${match.lead.name} בוואטסאפ!`);
-    const phone = (match.lead.phone || '').replace(/\D/g, '');
-    if (phone.length >= 9) {
-      window.open(`https://wa.me/972${phone.slice(1)}?text=${encodeURIComponent(msg)}`, '_blank');
-    }
-  };
-
-  const tabStyle = (t) => ({
-    padding: '8px 20px',
-    borderRadius: 12,
-    fontSize: 13,
-    fontWeight: 700,
-    cursor: 'pointer',
-    transition: 'all 0.15s',
-    background: tab === t ? 'linear-gradient(135deg,#3b82f6,#8b5cf6)' : 'rgba(255,255,255,0.04)',
-    color:      tab === t ? 'white' : '#64748b',
-    border:     tab === t ? 'none' : '1px solid rgba(255,255,255,0.07)',
-  });
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="flex-1 px-4 md:px-6 py-6 overflow-auto">
+    <div className="flex-1 px-4 md:px-6 py-6 overflow-auto" dir="rtl">
 
-      {/* Page header */}
-      <div className="mb-5 flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-white">צייד הלידים 🎯</h1>
-          <p className="text-xs mt-1" style={{ color: '#64748b' }}>
-            סורק פוסטים מפייסבוק דרך Apify · מנתח מחיר ועיר אוטומטית · מחלק לסוכנים
-          </p>
+      {/* ── HERO: claim from pool ───────────────────────────────────────────── */}
+      <div className="rounded-2xl p-5 mb-5"
+        style={{ background: '#1a2342', border: '1px solid rgba(99,102,241,0.25)' }}>
+
+        {/* Title + status dot */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+          <h2 className="text-base font-bold text-white">מצא ליד ממאגר המערכת</h2>
         </div>
-        {/* Tab selector */}
-        <div className="flex items-center gap-2">
-          <button style={tabStyle('facebook')} onClick={() => setTab('facebook')}>
-            📡 לידים מפייסבוק
+
+        {/* Filters: city + type */}
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>עיר</label>
+            <select value={filterCity} onChange={e => setFilterCity(e.target.value)}
+              className="dark-input w-full px-3 py-2.5 text-sm rounded-xl">
+              <option value="all">כל הערים</option>
+              {facets.cities.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider block mb-1 text-right" style={{ color: '#64748b' }}>סוג</label>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              className="dark-input w-full px-3 py-2.5 text-sm rounded-xl">
+              {TYPE_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              {/* Also include any types that exist in the pool but aren't in the static list */}
+              {facets.types.filter(t => !TYPE_OPTIONS.some(o => o.value === t)).map(t =>
+                <option key={t} value={t}>{t}</option>
+              )}
+            </select>
+          </div>
+        </div>
+
+        {/* Big yellow claim button + small purple manual */}
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <button onClick={handleHunt} disabled={hunting || quotaExceeded}
+            className="flex items-center justify-center gap-2 text-base font-black py-3.5 rounded-xl transition-all disabled:cursor-not-allowed"
+            style={{
+              background: quotaExceeded
+                ? 'rgba(255,255,255,0.06)'
+                : (hunting ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg,#fbbf24,#d97706)'),
+              color: quotaExceeded ? '#64748b' : '#1a1410',
+              boxShadow: (hunting || quotaExceeded) ? 'none' : '0 0 22px rgba(251,191,36,0.35)',
+            }}>
+            {hunting ? (
+              <><span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" /> צד...</>
+            ) : quotaExceeded ? (
+              <>🔒 נגמרה המכסה החודשית</>
+            ) : (
+              <><span className="text-lg">⚡</span> הוצא ליד עכשיו</>
+            )}
           </button>
-          <button style={tabStyle('matches')} onClick={() => setTab('matches')}>
-            🔍 מנוע התאמות
+
+          <button onClick={() => setShowManual(true)}
+            className="flex items-center justify-center gap-1.5 text-sm font-bold px-5 py-3.5 rounded-xl transition-all"
+            style={{
+              background: 'rgba(139,92,246,0.18)',
+              color: '#c4b5fd',
+              border: '1px solid rgba(139,92,246,0.35)',
+            }}>
+            + ידנית
           </button>
         </div>
+
+        {/* Quota indicator (only when limited) */}
+        {quota && !quota.unlimited && (
+          <div className="mt-3 text-[11px] text-right" style={{ color: quotaExceeded ? '#fca5a5' : '#64748b' }}>
+            מכסת חבילה: {quota.used}/{quota.limit} החודש
+            {quotaExceeded && ' — שדרג לחבילה Pro או Elite'}
+          </div>
+        )}
+
+        {/* Success flash banner */}
+        {flash && (
+          <div className="mt-3 px-4 py-2.5 rounded-xl text-sm font-bold text-right"
+            style={{ background: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.3)' }}>
+            ✅ {flash}
+          </div>
+        )}
+
+        {/* Error banner */}
+        {error && (
+          <div className="mt-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-right"
+            style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+            ⚠️ {error}
+          </div>
+        )}
       </div>
 
-      {/* ─────────── FACEBOOK TAB ─────────── */}
-      {tab === 'facebook' && (
-        <div className="space-y-4">
-
-          {/* ── Hunt Mode hero — fresh count + claim button ───────────── */}
-          <div className="rounded-2xl p-5 relative overflow-hidden"
-            style={{
-              background: 'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(239,68,68,0.12))',
-              border: '1px solid rgba(249,115,22,0.35)',
-              boxShadow: '0 0 30px rgba(249,115,22,0.15)',
-            }}>
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              {/* Left — counter */}
-              <div className="flex items-center gap-4">
-                <div className="relative">
-                  <span className="text-5xl font-black"
-                    style={{
-                      background: 'linear-gradient(135deg,#fbbf24,#ef4444)',
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent',
-                    }}>
-                    {freshCount}
-                  </span>
-                  {freshCount > 0 && (
-                    <span className="absolute -top-1 -right-2 w-2.5 h-2.5 rounded-full animate-pulse"
-                      style={{ background: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
-                  )}
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">
-                    {freshCount === 0 ? 'אין לידים טריים במאגר' : 'לידים טריים מחכים לציד'}
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>
-                    {freshCount === 0
-                      ? 'לחץ "סרוק" כדי למשוך פוסטים חדשים מפייסבוק'
-                      : 'הצייד הבא יהיה הליד הטרי ביותר במאגר'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Right — hunt button */}
-              <button
-                onClick={handleHunt}
-                disabled={hunting || freshCount === 0}
-                className="flex items-center gap-2 text-base font-black px-7 py-3.5 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  background: hunting
-                    ? 'rgba(255,255,255,0.1)'
-                    : 'linear-gradient(135deg,#f59e0b,#ef4444)',
-                  color: 'white',
-                  boxShadow: hunting ? 'none' : '0 0 24px rgba(239,68,68,0.5)',
-                  transform: hunting ? 'scale(0.98)' : 'scale(1)',
-                }}>
-                {hunting ? (
-                  <><span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> צד...</>
-                ) : (
-                  <><span className="text-xl">🎯</span> צייד ליד טרי</>
-                )}
-              </button>
+      {/* ── STATS strip ────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        {[
+          { icon: '🎯', value: stats.total,  label: 'סה"כ',    bg: 'rgba(139,92,246,0.18)', color: '#c4b5fd' },
+          { icon: '🔥', value: stats.active, label: 'בטיפול',  bg: 'rgba(245,158,11,0.18)', color: '#fbbf24' },
+          { icon: '✅', value: stats.closed, label: 'סגורים',  bg: 'rgba(34,197,94,0.18)',  color: '#4ade80' },
+        ].map(s => (
+          <div key={s.label} className="rounded-2xl p-5 text-center"
+            style={{ background: '#131c33', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div className="w-10 h-10 mx-auto rounded-xl flex items-center justify-center text-xl mb-2"
+              style={{ background: s.bg }}>
+              {s.icon}
             </div>
-
-            {huntError && (
-              <div className="mt-3 text-xs px-3 py-2 rounded-xl text-right"
-                style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }}>
-                ⚠️ {huntError}
-              </div>
-            )}
+            <div className="text-3xl font-black" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-xs mt-1" style={{ color: '#64748b' }}>{s.label}</div>
           </div>
+        ))}
+      </div>
 
-          {/* ── Hunted lead card — animated reveal ─────────────────────── */}
-          {huntedLead && (
-            <div className="rounded-2xl p-5 space-y-3 relative"
-              style={{
-                background: 'linear-gradient(135deg,#0f1629,#1e1b4b)',
-                border: '2px solid rgba(99,102,241,0.5)',
-                boxShadow: '0 0 40px rgba(99,102,241,0.3)',
-                animation: 'huntPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both',
-              }}>
-              {/* Close */}
-              <button onClick={() => setHuntedLead(null)}
-                className="absolute top-3 left-3 w-7 h-7 rounded-lg flex items-center justify-center text-sm"
-                style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}>✕</button>
-
-              {/* Header */}
-              <div className="flex items-center gap-2 pl-8">
-                <span className="text-2xl">🎯</span>
-                <span className="text-xs font-black tracking-wider px-2.5 py-1 rounded-full"
-                  style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80' }}>
-                  ליד חדש נחטף ✓
-                </span>
-                {huntedLead.original_post_date && (
-                  <span className="text-[11px] mr-auto" style={{ color: '#94a3b8' }}>
-                    {fmtRelative(huntedLead.original_post_date)}
-                  </span>
-                )}
-              </div>
-
-              {/* Title */}
-              <h3 className="text-lg font-bold text-white text-right leading-tight">
-                {huntedLead.title}
-              </h3>
-
-              {/* Meta row */}
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                {huntedLead.price > 0 && (
-                  <span className="text-base font-black px-3 py-1 rounded-xl"
-                    style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>
-                    {fmtPrice(huntedLead.price)}
-                  </span>
-                )}
-                {huntedLead.city && (
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
-                    style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
-                    📍 {huntedLead.city}
-                  </span>
-                )}
-                {huntedLead.rooms && (
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
-                    style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }}>
-                    🚪 {huntedLead.rooms} חד'
-                  </span>
-                )}
-                {huntedLead.sqm && (
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded-xl"
-                    style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }}>
-                    📐 {huntedLead.sqm} מ"ר
-                  </span>
-                )}
-              </div>
-
-              {/* Description */}
-              {huntedLead.description && (
-                <div className="text-sm text-right p-3 rounded-xl"
-                  style={{ background: 'rgba(0,0,0,0.25)', color: '#cbd5e1', maxHeight: 140, overflow: 'auto', lineHeight: 1.6 }}>
-                  {huntedLead.description}
-                </div>
-              )}
-
-              {/* Action buttons */}
-              <div className="flex items-center gap-2 flex-wrap justify-end pt-1">
-                {huntedLead.url && (
-                  <a href={huntedLead.url} target="_blank" rel="noopener noreferrer"
-                    className="text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5"
-                    style={{ background: 'rgba(59,130,246,0.18)', color: '#60a5fa' }}>
-                    🔗 פוסט מקורי
-                  </a>
-                )}
-                <button onClick={() => handleConvertCRM(huntedLead)}
-                  disabled={convertingId === huntedLead.id}
-                  className="text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 disabled:opacity-50"
-                  style={{ background: 'rgba(99,102,241,0.22)', color: '#a5b4fc' }}>
-                  {convertingId === huntedLead.id
-                    ? <><span className="w-3 h-3 border border-indigo-400/40 border-t-indigo-300 rounded-full animate-spin" /> ממיר...</>
-                    : <>➕ הוסף ל-CRM</>}
-                </button>
-                <button onClick={() => handleWhatsapp(huntedLead)}
-                  className="text-sm font-black px-5 py-2.5 rounded-xl flex items-center gap-2"
-                  style={{
-                    background: 'linear-gradient(135deg,#22c55e,#16a34a)',
-                    color: 'white',
-                    boxShadow: '0 0 18px rgba(34,197,94,0.4)',
-                  }}>
-                  💬 שלח בוואטסאפ
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Scan control bar — admin-only (cost control on Apify Actor runs) */}
-          {isAdmin && (
-          <div className="card rounded-2xl p-4 space-y-3">
-            {/* Row 1 — refresh + count */}
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={loadProperties}
-                  disabled={propLoading}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-60 transition-all"
-                  style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  {propLoading ? <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : '🔄'}
-                  רענן
-                </button>
-                <span className="text-xs" style={{ color: '#475569' }}>
-                  {properties.length} נכסים במאגר
-                </span>
-              </div>
-            </div>
-
-            {/* Row 2 — URL input + scan button */}
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Facebook group URL (optional — leave empty to use server default) */}
-              <div className="relative flex-1 min-w-[200px]">
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">🔗</span>
-                <input
-                  type="url"
-                  value={scanUrl}
-                  onChange={e => setScanUrl(e.target.value)}
-                  placeholder="קישור לקבוצת פייסבוק (אופציונלי)"
-                  dir="ltr"
-                  className="w-full rounded-xl pl-3 pr-9 py-2 text-sm"
-                  style={{
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#e2e8f0',
-                    outline: 'none',
-                  }}
-                />
-              </div>
-
-              <button
-                onClick={handleScan}
-                disabled={scanning}
-                className="flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-xl disabled:opacity-60 transition-all whitespace-nowrap"
-                style={{
-                  background: scanning
-                    ? 'rgba(255,255,255,0.06)'
-                    : 'linear-gradient(135deg,#ef4444,#f97316)',
-                  color: 'white',
-                  boxShadow: scanning ? 'none' : '0 0 18px rgba(239,68,68,0.35)',
-                }}>
-                {scanning ? (
-                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> סורק...</>
-                ) : (
-                  <><span className="text-base">📡</span> סרוק לידים חדשים מפייסבוק</>
-                )}
-              </button>
-            </div>
-
-            {/* Status message */}
-            {scanMsg && (
-              <div className="text-xs px-3 py-2 rounded-xl text-right"
-                style={{
-                  background: scanMsg.startsWith('✅') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                  color:      scanMsg.startsWith('✅') ? '#34d399' : '#f87171',
-                  border:     `1px solid ${scanMsg.startsWith('✅') ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
-                }}>
-                {scanMsg}
-              </div>
-            )}
-          </div>
-          )}
-
-          {/* For non-admin agents: a small refresh-only bar */}
-          {!isAdmin && (
-            <div className="card rounded-2xl p-3 flex items-center justify-between">
-              <button onClick={loadProperties} disabled={propLoading}
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl disabled:opacity-60"
-                style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.1)' }}>
-                {propLoading ? <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : '🔄'}
-                רענן רשימה
-              </button>
-              <span className="text-xs" style={{ color: '#475569' }}>
-                {properties.length} נכסים במאגר
-              </span>
-            </div>
-          )}
-
-          {/* Delete confirm hint */}
-          {deleteConfirm && (
-            <div className="text-xs px-4 py-2 rounded-xl text-right"
-              style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)' }}>
-              ⚠️ לחץ שוב על כפתור המחיקה לאישור סופי
-            </div>
-          )}
-
-          {/* Properties table */}
-          <PropertiesTable
-            properties={properties}
-            agents={agents}
-            loading={propLoading}
-            isAdmin={isAdmin}
-            convertingId={convertingId}
-            onEdit={setEditTarget}
-            onDelete={handleDelete}
-            onAssign={handleAssign}
-            onWhatsapp={handleWhatsapp}
-            onConvertCRM={handleConvertCRM}
-          />
+      {/* ── LEAD CARDS ──────────────────────────────────────────────────────── */}
+      {loadingMy ? (
+        <div className="rounded-2xl p-10 flex flex-col items-center gap-3"
+          style={{ background: '#131c33', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" />
+          <p className="text-xs" style={{ color: '#475569' }}>טוען לידים...</p>
+        </div>
+      ) : myLeads.length === 0 ? (
+        <div className="rounded-2xl p-12 flex flex-col items-center gap-3 text-center"
+          style={{ background: '#131c33', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="text-4xl">🎯</div>
+          <p className="text-sm font-semibold text-white">עדיין אין לידים שלי</p>
+          <p className="text-xs" style={{ color: '#475569' }}>לחץ על "הוצא ליד עכשיו" כדי למשוך את הראשון</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {myLeads.map(lead => (
+            <LeadCard
+              key={lead.id}
+              lead={lead}
+              onChangeStatus={handleChangeStatus}
+              onEdit={setEditTarget}
+              onDelete={handleDelete}
+              onConvertCRM={handleConvertCRM}
+            />
+          ))}
         </div>
       )}
 
-      {/* ─────────── MATCHES TAB ─────────── */}
-      {tab === 'matches' && (
-        <div className="space-y-4">
-          <div className="flex justify-end">
-            <button
-              onClick={() => loadMatches(true)}
-              disabled={matchScan}
-              className="flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-xl disabled:opacity-60 transition-all"
-              style={{ background: matchScan ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg,#3b82f6,#8b5cf6)', color: 'white' }}>
-              {matchScan ? (
-                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> סורק...</>
-              ) : (
-                <><span className="text-base">🔍</span> הפעל סריקה</>
-              )}
-            </button>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-5">
-            {/* Matches */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block" />
-                  <span className="text-xs font-semibold" style={{ color: '#34d399' }}>סריקה חיה</span>
-                </div>
-                <h2 className="text-sm font-bold text-white">
-                  התאמות שנמצאו 🔔
-                  {matches.length > 0 && (
-                    <span className="mr-2 text-xs px-2 py-0.5 rounded-full font-semibold"
-                      style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}>
-                      {matches.length}
-                    </span>
-                  )}
-                </h2>
-              </div>
-
-              {matchScan && matches.length === 0 ? (
-                <div className="card rounded-2xl p-8 flex flex-col items-center gap-3">
-                  <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" />
-                  <p className="text-xs" style={{ color: '#475569' }}>סורק מאגרי נכסים...</p>
-                </div>
-              ) : !matchLoaded ? (
-                <div className="card rounded-2xl p-8 flex flex-col items-center gap-3">
-                  <div className="w-8 h-8 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin" />
-                  <p className="text-xs" style={{ color: '#475569' }}>טוען...</p>
-                </div>
-              ) : matches.length === 0 ? (
-                <div className="card rounded-2xl p-10 flex flex-col items-center gap-3 text-center">
-                  <div className="text-4xl">🔍</div>
-                  <p className="text-sm font-semibold text-white">לא נמצאו התאמות</p>
-                  <p className="text-xs" style={{ color: '#475569' }}>הוסף לידים עם תקציב ואזור כדי למצוא התאמות</p>
-                </div>
-              ) : (
-                matches.map((m, i) => (
-                  <MatchCard key={m.id} match={m} idx={i} isSent={sent.has(m.id)} onSend={handleSend} />
-                ))
-              )}
-            </div>
-
-            {/* Profiles + status */}
-            <div className="space-y-4">
-              <div className="card rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-bold px-3 py-1 rounded-xl"
-                    style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}>
-                    {profiles.length} פרופילים
-                  </span>
-                  <h2 className="text-sm font-bold text-white">פרופילי לקוחות פעילים 🎯</h2>
-                </div>
-                {profiles.length === 0 ? (
-                  <p className="text-xs text-center py-4" style={{ color: '#334155' }}>אין פרופילים פעילים</p>
-                ) : (
-                  profiles.map(p => <ProfileRow key={p.lead.id} profile={p} />)
-                )}
-              </div>
-
-              <div className="card rounded-2xl p-4">
-                <h2 className="text-sm font-bold text-white text-right mb-3">סטטוס הציד ⚡</h2>
-                <div className="space-y-2.5">
-                  {[
-                    { label: 'מקורות שנסרקים',        value: stats?.sources?.join(', ') ?? 'יד2, מדלן, winwin', hi: true },
-                    { label: 'תדירות בדיקה',            value: stats?.scan_interval ?? 'כל שעה',              hi: false },
-                    { label: 'התאמות שנמצאו היום',      value: stats?.today_matches ?? '—',                   hi: false },
-                    { label: 'לקוחות עם פרופיל פעיל',  value: stats?.active_profiles ?? '—',                 hi: false },
-                  ].map(row => (
-                    <div key={row.label} className="flex items-center justify-between py-1.5"
-                      style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      <span className="text-xs font-semibold" style={{ color: row.hi ? '#34d399' : '#e2e8f0' }}>{row.value}</span>
-                      <span className="text-xs" style={{ color: '#475569' }}>{row.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit modal */}
+      {/* Modals */}
       {editTarget && (
-        <EditModal
-          property={editTarget}
-          onSave={handleEditSave}
-          onClose={() => setEditTarget(null)}
+        <EditModal property={editTarget} onSave={handleEditSave} onClose={() => setEditTarget(null)} />
+      )}
+      {showManual && (
+        <ManualLeadModal
+          onClose={() => setShowManual(false)}
+          onSaved={(created) => {
+            if (created) setMyLeads(prev => [created, ...prev]);
+            showToast('✅ הליד נוסף');
+          }}
         />
       )}
 
@@ -988,18 +579,6 @@ export default function LeadHunterPage({ agents = [], user = null }) {
           {toast}
         </div>
       )}
-
-      <style>{`
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes huntPop {
-          0%   { opacity: 0; transform: scale(0.85) translateY(-20px); }
-          60%  { opacity: 1; transform: scale(1.02) translateY(0); }
-          100% { opacity: 1; transform: scale(1)    translateY(0); }
-        }
-      `}</style>
     </div>
   );
 }

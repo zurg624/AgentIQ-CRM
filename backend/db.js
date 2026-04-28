@@ -38,6 +38,7 @@ db.exec(`
     password     TEXT NOT NULL,
     role         TEXT NOT NULL DEFAULT 'agent',
     display_name TEXT NOT NULL,
+    plan         TEXT NOT NULL DEFAULT 'base',
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -94,6 +95,9 @@ if (!leadCols.includes('last_contacted')) db.exec('ALTER TABLE leads ADD COLUMN 
 if (!leadCols.includes('owner_username')) db.exec('ALTER TABLE leads ADD COLUMN owner_username TEXT');
 if (!leadCols.includes('custom_fields'))  db.exec("ALTER TABLE leads ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '{}'");
 
+const userColsM = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!userColsM.includes('plan')) db.exec("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'base'");
+
 // ── Seed agents ───────────────────────────────────────────────────────────────
 const agentCount = db.prepare('SELECT COUNT(*) as c FROM agents').get().c;
 if (agentCount === 0) {
@@ -120,9 +124,9 @@ if (leadCount === 0) {
 // ── Seed users ────────────────────────────────────────────────────────────────
 const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
 if (userCount === 0) {
-  const ins = db.prepare('INSERT INTO users (username, password, role, display_name) VALUES (?, ?, ?, ?)');
-  ins.run('admin',  'admin123',  'admin', 'מנהל ראשי');
-  ins.run('agent1', 'agent123',  'agent', 'דוד לוי');
+  const ins = db.prepare('INSERT INTO users (username, password, role, display_name, plan) VALUES (?, ?, ?, ?, ?)');
+  ins.run('admin',  'admin123',  'admin', 'מנהל ראשי', 'elite');
+  ins.run('agent1', 'agent123',  'agent', 'דוד לוי',  'base');
 }
 
 // ── Seed default settings ─────────────────────────────────────────────────────
