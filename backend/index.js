@@ -614,18 +614,93 @@ app.use('/api/properties', require('./routes/propertiesApi')());
 //   APIFY_TOKEN     – Apify personal access token
 //   APIFY_ACTOR_ID  – Actor ID or "username/actor-name", e.g. "apify/facebook-groups-scraper"
 //   APIFY_START_URLS – comma-separated FB group URLs used as default when none supplied
-// POST /api/apify/run/all-groups — trigger Apify on ALL Israeli FB groups at once (ADMIN-ONLY)
-// Convenience endpoint: loads FACEBOOK_GROUPS.js and queues the entire list.
+// POST /api/apify/run/all-groups — cost-optimised mass scrape (ADMIN-ONLY)
+//
+// Cost knobs (all overridable via request body):
+//   • maxItems              7   — total items returned across all groups
+//   • resultsPerStartUrl    3   — only fetch the 3 newest posts per group
+//   • saturationThreshold  10   — skip categories whose cities are this full
+//   • respectTimeWindow  true   — only run between 08:30-20:30 Israel time
+//   • force              false  — bypass time window AND saturation skip
+//
+// Why this matters: Apify charges per CU (compute unit). 30 groups × 3 posts
+// = ~90 page loads max per run. With 7 runs/day, that's ~630 page loads/day,
+// well within free-tier limits even after a month.
 app.post('/api/apify/run/all-groups', requireAdmin, async (req, res) => {
-  const fbGroups = require('./FACEBOOK_GROUPS');
-  const allUrls = fbGroups.allGroupUrls();
-  if (!allUrls || allUrls.length === 0) {
-    return res.status(400).json({ error: 'No Facebook groups configured in FACEBOOK_GROUPS.js' });
+  const fbGroups   = require('./FACEBOOK_GROUPS');
+  const propsRoute = require('./routes/propertiesApi');
+
+  const body = req.body || {};
+  const force                = !!body.force;
+  const respectTimeWindow    = body.respectTimeWindow !== false;  // default true
+  const maxItems             = parseInt(body.maxItems, 10)            || 7;
+  const resultsPerStartUrl   = parseInt(body.resultsPerStartUrl, 10)  || 3;
+  const saturationThreshold  = parseInt(body.saturationThreshold, 10) || propsRoute.SATURATION_THRESHOLD;
+
+  // ── Time window guard (Israel time, 08:30-20:30) ────────────────────────
+  if (respectTimeWindow && !force) {
+    const ilNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const minutesOfDay = ilNow.getHours() * 60 + ilNow.getMinutes();
+    const WINDOW_START = 8 * 60 + 30;   // 08:30
+    const WINDOW_END   = 20 * 60 + 30;  // 20:30
+    if (minutesOfDay < WINDOW_START || minutesOfDay > WINDOW_END) {
+      console.log(`[apify/all-groups] skipped — outside scrape window (current=${ilNow.getHours()}:${String(ilNow.getMinutes()).padStart(2,'0')} IL)`);
+      return res.json({
+        ok: false,
+        skipped: 'outside_time_window',
+        window: '08:30-20:30 Asia/Jerusalem',
+        current_il_time: ilNow.toISOString(),
+      });
+    }
   }
-  console.log(`[apify/run/all-groups] queuing ${allUrls.length} Israeli FB groups`);
-  // Forward to the main /apify/run endpoint with all groups
-  req.body = { ...req.body, startUrls: allUrls };
-  // Re-route to the standard handler
+
+  // ── Saturation check — skip categories whose cities are already full ─────
+  let skipCategories = new Set();
+  let saturationDetails = {};
+  if (!force) {
+    try {
+      const counts = await propsRoute.getCityFreshCounts();
+      for (const [cat, cities] of Object.entries(fbGroups.CATEGORY_CITIES)) {
+        if (cities.length === 0) continue;  // 'national' / 'investor' — never skip
+        const totals = cities.map(c => counts.get(c) || 0);
+        const saturated = totals.every(n => n >= saturationThreshold);
+        if (saturated) {
+          skipCategories.add(cat);
+          saturationDetails[cat] = Object.fromEntries(cities.map((c, i) => [c, totals[i]]));
+        }
+      }
+    } catch (e) {
+      console.warn('[apify/all-groups] saturation check failed (continuing):', e.message);
+    }
+  }
+
+  const startUrls = skipCategories.size > 0
+    ? fbGroups.urlsExcludingCategories(skipCategories)
+    : fbGroups.allGroupUrls();
+
+  if (!startUrls || startUrls.length === 0) {
+    return res.json({
+      ok: false,
+      skipped: 'all_categories_saturated',
+      threshold: saturationThreshold,
+      saturation_details: saturationDetails,
+    });
+  }
+
+  console.log(`[apify/all-groups] groups=${startUrls.length} maxItems=${maxItems} perGroup=${resultsPerStartUrl} skipped=[${[...skipCategories].join(',') || 'none'}]`);
+
+  // Forward to the main /apify/run handler with the cost-optimised payload.
+  // The actor input fields here (maxItems, resultsPerStartUrl) are standard
+  // for apify/facebook-groups-scraper and similar actors — adjust if you swap actors.
+  req.body = {
+    ...body,
+    startUrls,
+    maxItems,
+    resultsPerStartUrl,
+    // Pass-through diagnostic so the response carries it
+    _saturation_skipped: [...skipCategories],
+  };
+
   return app._router.stack
     .find(r => r.route && r.route.path === '/api/apify/run')
     .handle(req, res);
@@ -665,10 +740,14 @@ app.post('/api/apify/run', requireAdmin, async (req, res) => {
   }
 
   // Merge the resolved startUrls with any other actor-specific fields the
-  // caller may have sent (e.g. maxItems, proxy settings).
-  const actorInput = { ...(req.body || {}), startUrls };
+  // caller may have sent (e.g. maxItems, proxy settings). Strip any fields
+  // we use for internal diagnostics (prefixed with `_`).
+  const cleanBody = Object.fromEntries(
+    Object.entries(req.body || {}).filter(([k]) => !k.startsWith('_'))
+  );
+  const actorInput = { ...cleanBody, startUrls };
 
-  console.log(`[apify/run] actor=${actorId} startUrls=${startUrls.map(u => u.url).join(', ')}`);
+  console.log(`[apify/run] actor=${actorId} startUrls=${startUrls.length} maxItems=${actorInput.maxItems ?? 'unbounded'} perGroup=${actorInput.resultsPerStartUrl ?? 'unbounded'}`);
 
   try {
     const runRes = await fetch(

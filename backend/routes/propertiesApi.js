@@ -13,6 +13,38 @@ const PLAN_QUOTA = { base: 10, pro: Infinity, elite: Infinity };
 const POOL_TTL_HOURS = 24;
 const poolTtlIso = () => new Date(Date.now() - POOL_TTL_HOURS * 3600_000).toISOString();
 
+// Saturation threshold — if a city has more than this many unclaimed fresh
+// leads, the scheduler skips scraping groups that primarily serve it. This
+// is what keeps the Apify bill in check: don't scrape what we don't need.
+const SATURATION_THRESHOLD = 10;
+
+/**
+ * Return a Map<city, count> of unclaimed fresh leads per city.
+ * Used by the scheduler to skip already-saturated cities.
+ *
+ * Exported as a property of the module so the index.js scheduler can call it.
+ */
+async function getCityFreshCounts() {
+  if (!supabase) return new Map();
+  const { data, error } = await supabase
+    .from('properties')
+    .select('city')
+    .eq('is_claimed', false)
+    .gte('ingested_at', poolTtlIso())
+    .not('city', 'is', null);
+  if (error) {
+    if (error.message?.includes('column')) return new Map();
+    console.warn('[saturation] count error:', error.message);
+    return new Map();
+  }
+  const counts = new Map();
+  for (const row of data || []) {
+    if (!row.city) continue;
+    counts.set(row.city, (counts.get(row.city) || 0) + 1);
+  }
+  return counts;
+}
+
 // Start of the current calendar month (UTC) — anchor for monthly quota counting.
 function startOfMonthIso() {
   const d = new Date();
@@ -422,3 +454,8 @@ module.exports = function createPropertiesRouter() {
 
   return router;
 };
+
+// Side-channel exports for non-route consumers (e.g. the scheduler in index.js)
+module.exports.getCityFreshCounts = getCityFreshCounts;
+module.exports.SATURATION_THRESHOLD = SATURATION_THRESHOLD;
+module.exports.cleanupStalePool = cleanupStalePool;

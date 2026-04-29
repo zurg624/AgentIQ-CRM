@@ -87,6 +87,21 @@ const GROUPS = {
   ],
 };
 
+// ── City coverage map ──────────────────────────────────────────────────────
+// Maps each group category to the primary Israeli cities it covers. Drives
+// the "skip saturated cities" cost optimisation: if a category's cities
+// already have enough fresh leads in the pool, we skip its groups this run.
+const CATEGORY_CITIES = {
+  national:  [],  // covers everywhere — never skipped
+  telAviv:   ['תל אביב', 'יפו', 'גבעתיים', 'רמת גן', 'הרצליה', 'בני ברק', 'חולון', 'בת ים'],
+  haifa:     ['חיפה', 'נשר', 'קריית אתא', 'קריית מוצקין', 'קריית ביאליק', 'כרמיאל', 'נהריה'],
+  jerusalem: ['ירושלים', 'מבשרת ציון', 'בית שמש', 'מעלה אדומים'],
+  south:     ['באר שבע', 'אשדוד', 'אשקלון', 'דימונה', 'ערד', 'קריית גת'],
+  suburban:  ['מודיעין', 'רעננה', 'פתח תקווה', 'ראשון לציון', 'נס ציונה',
+              'רחובות', 'הוד השרון', 'כפר סבא', 'נתניה', 'יבנה'],
+  investor:  [],  // investor-focused — keep running
+};
+
 /**
  * Flatten all groups into a single array
  */
@@ -94,6 +109,23 @@ function allGroupUrls() {
   return Object.values(GROUPS)
     .flat()
     .filter(url => typeof url === 'string' && url.startsWith('https'));
+}
+
+/**
+ * Return URLs filtered by category — used by the cost-optimised scheduler
+ * to skip categories whose cities are already saturated.
+ *
+ * @param {Set<string>} skipCategories - category keys to omit
+ * @returns {string[]}
+ */
+function urlsExcludingCategories(skipCategories) {
+  const skip = new Set(skipCategories || []);
+  const out = [];
+  for (const [cat, urls] of Object.entries(GROUPS)) {
+    if (skip.has(cat)) continue;
+    if (Array.isArray(urls)) out.push(...urls);
+  }
+  return out.filter(url => typeof url === 'string' && url.startsWith('https'));
 }
 
 /**

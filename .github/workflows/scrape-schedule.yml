@@ -1,0 +1,72 @@
+name: Lead Pool Scrape
+
+# Triggers the cost-optimised scrape every 2 hours during Israeli business hours
+# (08:30-20:30 Asia/Jerusalem). The backend itself ALSO enforces the time window
+# as a defense-in-depth — manual triggers outside the window will be skipped.
+#
+# Why these specific UTC times:
+#   Israel = UTC+2 (winter / IST) or UTC+3 (summer / IDT)
+#   We schedule slightly inside the window to cover both DST states safely.
+#
+# Cron schedule (UTC):
+#   06:30  →  08:30 IST / 09:30 IDT  (start of day)
+#   08:30  →  10:30 IST / 11:30 IDT
+#   10:30  →  12:30 IST / 13:30 IDT
+#   12:30  →  14:30 IST / 15:30 IDT
+#   14:30  →  16:30 IST / 17:30 IDT
+#   16:30  →  18:30 IST / 19:30 IDT
+#   18:30  →  20:30 IST / 21:30 IDT  (last run; 21:30 IDT will be skipped server-side)
+#
+# = 7 runs/day max. Backend gate filters out any that fall outside 08:30-20:30 IL.
+
+on:
+  schedule:
+    - cron: '30 6,8,10,12,14,16,18 * * *'
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+    inputs:
+      force:
+        description: 'Bypass time window + saturation check'
+        required: false
+        default: 'false'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger cost-optimised scrape
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          if [ -z "$BACKEND_URL" ] || [ -z "$ADMIN_TOKEN" ]; then
+            echo "❌ Missing secrets BACKEND_URL or ADMIN_TOKEN"
+            exit 1
+          fi
+
+          echo "🎯 Triggering /apify/run/all-groups (force=$FORCE)"
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "$BACKEND_URL/api/apify/run/all-groups" \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"force\": $FORCE}")
+
+          body=$(echo "$response" | head -n -1)
+          status=$(echo "$response" | tail -n 1)
+
+          echo "HTTP $status"
+          echo "$body" | head -c 1000
+
+          if [ "$status" != "200" ]; then
+            echo "❌ Scrape failed"
+            exit 1
+          fi
+
+          # Surface the result clearly in the Actions log
+          if echo "$body" | grep -q '"skipped"'; then
+            echo "⏸  Skipped (time window or saturation)"
+          else
+            echo "✅ Scrape queued"
+          fi

@@ -134,13 +134,41 @@ function ManualLeadModal({ onClose, onSaved }) {
   );
 }
 
-// ── Lead Card (matches screenshot) ──────────────────────────────────────────
-function LeadCard({ lead, onChangeStatus, onEdit, onDelete, onConvertCRM }) {
+// ── Helpers used by LeadCard ────────────────────────────────────────────────
+// "How long ago was this lead pulled?" — drives the freshness badge.
+function freshnessLabel(lead) {
+  const ref = lead.original_post_date || lead.claimed_at || lead.ingested_at;
+  if (!ref) return null;
+  const ms = Date.now() - new Date(ref).getTime();
+  if (ms < 0) return null;
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1)   return 'נשאב כרגע';
+  if (mins < 60)  return `נשאב לפני ${mins} דק׳`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `נשאב לפני ${hours} שע׳`;
+  const days = Math.round(hours / 24);
+  return `נשאב לפני ${days} ימ׳`;
+}
+
+// Pre-built WhatsApp opener — the agent doesn't have to type a thing.
+function buildWhatsappMessage(lead) {
+  const cityPart = lead.city ? `שפרסמת ב-${lead.city}` : 'שפרסמת';
+  const typePart = lead.type ? ` (${lead.type})` : '';
+  return `היי, ראיתי את הנכס ${cityPart}${typePart}. אשמח להבין אם הנכס עדיין רלוונטי ואם אפשר לקבוע פגישה לראות אותו.`;
+}
+
+// ── Lead Card ───────────────────────────────────────────────────────────────
+function LeadCard({ lead, onChangeStatus, onEdit, onDelete, onConvertCRM, agentCity }) {
   const status = lead.status || 'New';
   const pill = STATUS_PILLS[status] || STATUS_PILLS.New;
   const phone = extractPhone(lead);
   const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
   const waPhone = phoneDigits.startsWith('0') ? '972' + phoneDigits.slice(1) : phoneDigits;
+  const waMessage = encodeURIComponent(buildWhatsappMessage(lead));
+
+  // Visual indicators — "match" + "fresh" — surface SaaS value at a glance
+  const fresh = freshnessLabel(lead);
+  const isCityMatch = !!(agentCity && agentCity !== 'all' && lead.city === agentCity);
 
   // Build the meta line: "📍 city · type · rooms חד' · ₪price"
   const metaParts = [];
@@ -173,6 +201,24 @@ function LeadCard({ lead, onChangeStatus, onEdit, onDelete, onConvertCRM }) {
         </div>
       </div>
 
+      {/* Freshness + city-match badges — the "live hunt" reassurance */}
+      {(fresh || isCityMatch) && (
+        <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold">
+          {isCityMatch && (
+            <span className="px-2 py-1 rounded-md"
+              style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.3)' }}>
+              ✓ התאמה לעיר שלך
+            </span>
+          )}
+          {fresh && (
+            <span className="px-2 py-1 rounded-md"
+              style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)' }}>
+              ⚡ {fresh}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Description */}
       {lead.description && (
         <p className="text-xs text-right leading-relaxed" style={{ color: '#cbd5e1' }}>
@@ -180,26 +226,60 @@ function LeadCard({ lead, onChangeStatus, onEdit, onDelete, onConvertCRM }) {
         </p>
       )}
 
-      {/* Action row — RTL means first item appears rightmost */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {phone && (
+      {/* ── Quick Actions row — primary: call / WA / open / CRM ─────────── */}
+      <div className="grid grid-cols-2 gap-2">
+        {phone ? (
           <a href={`tel:${phone}`}
-            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
-            style={{ background: 'rgba(34,197,94,0.18)', color: '#4ade80', textDecoration: 'none' }}>
-            <span>📞</span><span dir="ltr">{phone}</span>
+            className="flex items-center justify-center gap-1.5 text-sm font-bold py-2.5 rounded-xl transition-all"
+            style={{
+              background: 'linear-gradient(135deg, rgba(34,197,94,0.25), rgba(16,185,129,0.18))',
+              color: '#4ade80',
+              border: '1px solid rgba(34,197,94,0.4)',
+              textDecoration: 'none',
+              boxShadow: '0 0 12px rgba(34,197,94,0.15)',
+            }}>
+            📞 חיוג מהיר
           </a>
+        ) : (
+          <div className="flex items-center justify-center gap-1.5 text-xs py-2.5 rounded-xl"
+            style={{ background: 'rgba(255,255,255,0.04)', color: '#475569' }}>
+            📞 אין מספר
+          </div>
         )}
-        {phone && (
-          <a href={`https://wa.me/${waPhone}`} target="_blank" rel="noreferrer"
+
+        {phone ? (
+          <a href={`https://wa.me/${waPhone}?text=${waMessage}`} target="_blank" rel="noreferrer"
+            className="flex items-center justify-center gap-1.5 text-sm font-bold py-2.5 rounded-xl transition-all"
+            style={{
+              background: 'linear-gradient(135deg, rgba(37,211,102,0.25), rgba(16,185,129,0.18))',
+              color: '#25d366',
+              border: '1px solid rgba(37,211,102,0.4)',
+              textDecoration: 'none',
+              boxShadow: '0 0 12px rgba(37,211,102,0.15)',
+            }}>
+            💬 שלח וואטסאפ
+          </a>
+        ) : (
+          <div className="flex items-center justify-center gap-1.5 text-xs py-2.5 rounded-xl"
+            style={{ background: 'rgba(255,255,255,0.04)', color: '#475569' }}>
+            💬 אין מספר
+          </div>
+        )}
+      </div>
+
+      {/* ── Secondary actions row ────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {lead.url && (
+          <a href={lead.url} target="_blank" rel="noreferrer"
             className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
-            style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399', textDecoration: 'none' }}>
-            💬 WA
+            style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc', textDecoration: 'none' }}>
+            🔗 פתח פוסט מקורי
           </a>
         )}
         <button onClick={() => onConvertCRM(lead)}
           className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
           style={{ background: 'rgba(139,92,246,0.22)', color: '#c4b5fd' }}>
-          📊 CRM
+          📊 העבר ל-CRM
         </button>
         <button onClick={() => onEdit(lead)}
           className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
@@ -447,7 +527,11 @@ export default function LeadHunterPage({ user = null }) {
         message,
         owner_username: user?.username || null,
       });
-      showToast('✅ הועבר ל-CRM');
+      // Auto-flip status to "Contacted" in the Hunter card too — once the
+      // lead is in the agent's main CRM, it's officially "in their pipeline".
+      setMyLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status: 'Contacted' } : l));
+      try { await api.updateProperty(lead.id, { status: 'Contacted' }); } catch {}
+      showToast('✅ הועבר ל-CRM (סטטוס: בטיפול)');
     } catch (e) { showToast('❌ ' + e.message); }
   };
 
@@ -598,6 +682,7 @@ export default function LeadHunterPage({ user = null }) {
             <LeadCard
               key={lead.id}
               lead={lead}
+              agentCity={filterCity}
               onChangeStatus={handleChangeStatus}
               onEdit={setEditTarget}
               onDelete={handleDelete}
