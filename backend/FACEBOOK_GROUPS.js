@@ -9,7 +9,20 @@
  * The Apify actor (facebook-groups-scraper) will run on all these groups
  * and funnel posts into the properties table every 30 minutes.
  *
- * Usage:
+ * INITIAL SCRAPE (First-time Pool Population)
+ * ─────────────────────────────────────────
+ * To fill the pool with today's fresh leads:
+ *
+ *   export ADMIN_TOKEN="your_bearer_token"
+ *   curl -X POST \
+ *     https://agentiq-crm.onrender.com/api/apify/run/all-groups \
+ *     -H "Authorization: Bearer $ADMIN_TOKEN" \
+ *     -H "Content-Type: application/json" \
+ *     -d '{}'
+ *
+ * See backend/INITIAL_SCRAPE.md for full guide.
+ *
+ * Usage in code:
  *   const groups = require('./FACEBOOK_GROUPS');
  *   for (const url of groups.allGroupUrls()) { await runApifyOnGroup(url); }
  */
