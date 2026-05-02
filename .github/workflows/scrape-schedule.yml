@@ -32,7 +32,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Trigger cost-optimised scrape
         env:
@@ -40,33 +40,89 @@ jobs:
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
         run: |
-          if [ -z "$BACKEND_URL" ] || [ -z "$ADMIN_TOKEN" ]; then
-            echo "❌ Missing secrets BACKEND_URL or ADMIN_TOKEN"
-            exit 1
+          # ── Diagnostic: verify secrets are wired ──────────────────────────
+          echo "=== Secret diagnostics ==="
+          if [ -z "$BACKEND_URL" ]; then
+            echo "❌ BACKEND_URL is EMPTY — go to Settings → Secrets → Actions and add it"
+            SECRETS_OK=false
+          else
+            echo "✅ BACKEND_URL is set (${#BACKEND_URL} chars)"
           fi
 
-          echo "🎯 Triggering /apify/run/all-groups (force=$FORCE)"
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "❌ ADMIN_TOKEN is EMPTY — go to Settings → Secrets → Actions and add it"
+            SECRETS_OK=false
+          else
+            echo "✅ ADMIN_TOKEN is set (${#ADMIN_TOKEN} chars)"
+            # Warn if someone accidentally included "Bearer " in the secret
+            if echo "$ADMIN_TOKEN" | grep -qi '^bearer '; then
+              echo "⚠️  WARNING: ADMIN_TOKEN starts with 'Bearer ' — remove that prefix!"
+              echo "    The workflow adds 'Bearer ' automatically."
+              echo "    Secret should be ONLY the base64 string, e.g.: YWRtaW46YWRtaW46MTAwMA=="
+            fi
+          fi
 
-          response=$(curl -s -w "\n%{http_code}" -X POST \
+          if [ "${SECRETS_OK}" = "false" ]; then
+            exit 1
+          fi
+          echo ""
+
+          # ── Fire the request ──────────────────────────────────────────────
+          echo "=== Sending request ==="
+          echo "URL: $BACKEND_URL/api/apify/run/all-groups"
+          echo "force=$FORCE"
+          echo ""
+
+          # --max-time 60: Render free tier can take ~30s to wake up
+          http_response=$(curl \
+            --silent \
+            --show-error \
+            --max-time 60 \
+            --write-out "HTTPSTATUS:%{http_code}" \
+            -X POST \
             "$BACKEND_URL/api/apify/run/all-groups" \
             -H "Authorization: Bearer $ADMIN_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"force\": $FORCE}")
+            -d "{\"force\": $FORCE}" 2>&1)
 
-          body=$(echo "$response" | head -n -1)
-          status=$(echo "$response" | tail -n 1)
+          # Split body and status code
+          body=$(echo "$http_response" | sed -e 's/HTTPSTATUS\:.*//g')
+          status=$(echo "$http_response" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
 
-          echo "HTTP $status"
-          echo "$body" | head -c 1000
+          echo "=== Server Response ==="
+          echo "HTTP Status: $status"
+          echo "Body:"
+          echo "$body" | head -c 2000
+          echo ""
 
-          if [ "$status" != "200" ]; then
-            echo "❌ Scrape failed"
+          # ── Interpret the result ──────────────────────────────────────────
+          if [ -z "$status" ] || [ "$status" = "000" ]; then
+            echo "❌ No response from server — connection failed or timed out"
+            echo "   Check that BACKEND_URL is correct and the server is running"
             exit 1
           fi
 
-          # Surface the result clearly in the Actions log
+          if [ "$status" = "401" ]; then
+            echo "❌ 401 Unauthorized — token rejected"
+            echo "   ADMIN_TOKEN must be: base64(\"username:admin:timestamp\")"
+            echo "   Example: btoa(\"admin:admin:1000\") → YWRtaW46YWRtaW46MTAwMA=="
+            exit 1
+          fi
+
+          if [ "$status" = "403" ]; then
+            echo "❌ 403 Forbidden — token decoded OK but role is not 'admin'"
+            echo "   Make sure the middle segment is 'admin': base64(\"X:admin:Y\")"
+            exit 1
+          fi
+
+          if [ "$status" != "200" ]; then
+            echo "❌ Unexpected HTTP $status from server"
+            exit 1
+          fi
+
+          # 200 — check if skipped or queued
           if echo "$body" | grep -q '"skipped"'; then
-            echo "⏸  Skipped (time window or saturation)"
+            echo "⏸  Skipped (outside time window or all categories saturated)"
           else
-            echo "✅ Scrape queued"
+            echo "✅ Scrape successfully queued"
           fi
